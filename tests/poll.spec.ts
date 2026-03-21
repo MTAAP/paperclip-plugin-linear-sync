@@ -1010,3 +1010,110 @@ describe("linear-poll: agent auto-invoke — new issues", () => {
     expect(harness.logs.some((l) => l.message.includes("failed to invoke agent"))).toBe(true);
   });
 });
+
+describe("linear-poll: agent auto-invoke — status transitions on existing issues", () => {
+  /**
+   * Helper: run an initial poll to create an issue, then run a second poll
+   * where the Linear issue has a new status. Returns the invoke spy.
+   */
+  async function setupExistingIssueWithStatusChange(opts: {
+    initialStateName: string;
+    newStateName: string;
+    config?: Record<string, unknown>;
+  }) {
+    const config = {
+      ...BASE_CONFIG,
+      statusMapping: {
+        Todo: "todo",
+        "In Progress": "in_progress",
+        "In Review": "in_review",
+        Done: "done",
+        Cancelled: "cancelled",
+        Backlog: "backlog",
+      },
+      ...opts.config,
+    };
+    const harness = makeHarness(config);
+    await plugin.definition.setup(harness.ctx);
+    seedAgent(harness, "agent-default-1");
+
+    // First poll: create the issue with the initial status (full scan — no cursor)
+    const initialIssue = makeLinearIssue({
+      state: { id: "state-init", name: opts.initialStateName, type: "unstarted", color: "#eee", description: null, team: { id: "team-1", name: "Engineering" } },
+    });
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([initialIssue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    // Now set up second poll: same Linear issue with new status
+    // poll-cursor was set by the first poll, so this is NOT a full scan
+    const updatedIssue = makeLinearIssue({
+      state: { id: "state-new", name: opts.newStateName, type: "started", color: "#ffd700", description: null, team: { id: "team-1", name: "Engineering" } },
+      updatedAt: "2026-03-20T12:00:00.000Z", // newer than first poll
+    });
+
+    const invokeSpy = vi.spyOn(harness.ctx.agents, "invoke");
+
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([updatedIssue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    return { invokeSpy, harness };
+  }
+
+  it("invokes agent when status transitions to in_progress", async () => {
+    const { invokeSpy, harness } = await setupExistingIssueWithStatusChange({
+      initialStateName: "Todo",
+      newStateName: "In Progress",
+    });
+
+    expect(invokeSpy).toHaveBeenCalledOnce();
+    expect(invokeSpy).toHaveBeenCalledWith(
+      "agent-default-1",
+      COMPANY_ID,
+      expect.objectContaining({
+        reason: expect.stringContaining("in_progress"),
+      }),
+    );
+  });
+
+  it("invokes agent when status transitions to in_review", async () => {
+    const { invokeSpy } = await setupExistingIssueWithStatusChange({
+      initialStateName: "In Progress",
+      newStateName: "In Review",
+    });
+
+    expect(invokeSpy).toHaveBeenCalledOnce();
+    expect(invokeSpy).toHaveBeenCalledWith(
+      "agent-default-1",
+      COMPANY_ID,
+      expect.objectContaining({
+        reason: expect.stringContaining("in_review"),
+      }),
+    );
+  });
+
+  it("does NOT invoke agent when status transitions to done", async () => {
+    const { invokeSpy } = await setupExistingIssueWithStatusChange({
+      initialStateName: "In Progress",
+      newStateName: "Done",
+    });
+
+    expect(invokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT invoke agent when status did not actually change (same value re-synced)", async () => {
+    const { invokeSpy } = await setupExistingIssueWithStatusChange({
+      initialStateName: "In Progress",
+      newStateName: "In Progress",
+    });
+
+    expect(invokeSpy).not.toHaveBeenCalled();
+  });
+});

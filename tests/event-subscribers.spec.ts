@@ -651,6 +651,62 @@ describe("issue.comment.created — comment push", () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(harness.logs.filter((l) => l.level === "error")).toHaveLength(0);
   });
+
+  // BUG-3 regression: outbound Linear comment ID must be stored after posting
+  it("stores the Linear comment ID in synced-outbound-comment-ids after posting (BUG-3)", async () => {
+    const harness = makeHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    await seedLinkedIssue(harness, { paperclipId: "pc-1", linearId: "lin-1" });
+
+    globalThis.fetch = mockFetchSuccess({
+      commentCreate: {
+        success: true,
+        comment: {
+          id: "linear-comment-xyz",
+          body: "Test",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          user: null,
+        },
+      },
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.emit("issue.comment.created", { body: "Hello from Paperclip." }, { entityId: "pc-1" });
+
+    const storedIds = harness.getState({
+      scopeKind: "issue",
+      scopeId: "pc-1",
+      stateKey: "synced-outbound-comment-ids",
+    }) as string[] | undefined;
+    expect(Array.isArray(storedIds)).toBe(true);
+    expect(storedIds).toContain("linear-comment-xyz");
+  });
+
+  // BUG-4 regression: no ISO timestamp must be stored as the comment cursor
+  it("does NOT write an ISO timestamp to comment-cursor after posting (BUG-4)", async () => {
+    const harness = makeHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    await seedLinkedIssue(harness, { paperclipId: "pc-1", linearId: "lin-1" });
+
+    globalThis.fetch = mockFetchSuccess({
+      commentCreate: {
+        success: true,
+        comment: { id: "c1", body: "", createdAt: "", updatedAt: "", user: null },
+      },
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.emit("issue.comment.created", { body: "A comment." }, { entityId: "pc-1" });
+
+    // comment-cursor must NOT be set to an ISO timestamp (or any value) by the outbound handler
+    const cursor = harness.getState({
+      scopeKind: "issue",
+      scopeId: "pc-1",
+      stateKey: "comment-cursor",
+    });
+    expect(cursor).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

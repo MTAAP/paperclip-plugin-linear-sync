@@ -54,6 +54,7 @@ type PluginConfig = {
   syncDirection?: "bidirectional" | "linear_to_paperclip" | "paperclip_to_linear";
   commentSyncEnabled?: boolean;
   prioritySyncEnabled?: boolean;
+  agentAutoInvokeEnabled?: boolean;
   linearTeamFilter?: string[];
   projectRoutingMode?: "single" | "team_mapped" | "project_mapped";
   targetProjectId?: string;
@@ -70,6 +71,7 @@ const DEFAULT_CONFIG: PluginConfig = {
   syncDirection: "bidirectional",
   commentSyncEnabled: true,
   prioritySyncEnabled: true,
+  agentAutoInvokeEnabled: true,
   projectRoutingMode: "single",
   teamProjectMapping: {},
   linearProjectMapping: {},
@@ -1163,6 +1165,19 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
           />
           <span>Enable priority sync</span>
         </label>
+
+        <label style={checkboxRowStyle}>
+          <input
+            type="checkbox"
+            checked={config.agentAutoInvokeEnabled !== false}
+            onChange={(e) => set("agentAutoInvokeEnabled", e.target.checked)}
+          />
+          <span>Auto-invoke agents</span>
+        </label>
+        <span style={{ ...helpTextStyle, marginTop: "-8px" }}>
+          Automatically invoke the assigned agent when a new issue is synced or an
+          issue&apos;s status changes to an active state (in_progress, in_review).
+        </span>
       </section>
 
       {/* ------------------------------------------------------------------ */}

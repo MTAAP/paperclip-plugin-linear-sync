@@ -20,6 +20,7 @@ export const LinearSyncConfigSchema = z.object({
   syncDirection: SyncDirectionSchema.default("bidirectional"),
   commentSyncEnabled: z.boolean().default(true),
   prioritySyncEnabled: z.boolean().default(true),
+  agentAutoInvokeEnabled: z.boolean().default(true),
   linearTeamFilter: z.array(z.string()).optional(),
 
   // Mode 2 project routing fields
@@ -42,6 +43,7 @@ export const DEFAULT_CONFIG: Partial<LinearSyncConfig> = {
   syncDirection: "bidirectional",
   commentSyncEnabled: true,
   prioritySyncEnabled: true,
+  agentAutoInvokeEnabled: true,
   projectRoutingMode: "single",
   teamProjectMapping: {},
   linearProjectMapping: {},

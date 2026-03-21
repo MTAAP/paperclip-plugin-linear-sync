@@ -938,3 +938,90 @@ describe("no linearApiKeyRef configured", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// issue.comment.created — diagnostic logging
+// ---------------------------------------------------------------------------
+
+describe("issue.comment.created — diagnostic logging", () => {
+  it("logs debug entry message with issueId at handler start", async () => {
+    const harness = makeHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    await seedLinkedIssue(harness, { paperclipId: "pc-diag", linearId: "lin-diag" });
+
+    globalThis.fetch = mockFetchSuccess({
+      commentCreate: { success: true, comment: { id: "c1", body: "", createdAt: "", updatedAt: "", user: null } },
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.emit(
+      "issue.comment.created",
+      { body: "Diagnostic test comment." },
+      { entityId: "pc-diag" },
+    );
+
+    // Should have a debug log at entry with the issueId
+    expect(
+      harness.logs.some(
+        (l) => l.level === "debug" && l.message.includes("handleCommentCreated") && l.message.includes("entry"),
+      ),
+    ).toBe(true);
+  });
+
+  it("logs debug message at each early return (e.g. comment sync disabled)", async () => {
+    const harness = makeHarness({ commentSyncEnabled: false });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "issue.comment.created",
+      { body: "Should be skipped." },
+      { entityId: "pc-skip" },
+    );
+
+    expect(
+      harness.logs.some(
+        (l) => l.level === "debug" && l.message.includes("comment sync disabled"),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue.comment.created — error tracking in instance state
+// ---------------------------------------------------------------------------
+
+describe("issue.comment.created — error tracking", () => {
+  it("stores last-comment-sync-error-at in instance state on failure", async () => {
+    const harness = makeHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    await seedLinkedIssue(harness, { paperclipId: "pc-1", linearId: "lin-1" });
+
+    // Mock fetch that returns a non-rate-limit error
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      headers: { get: () => null },
+      json: async () => ({}),
+      text: async () => "Internal Server Error",
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.emit(
+      "issue.comment.created",
+      { body: "This will fail." },
+      { entityId: "pc-1" },
+    );
+
+    const errorAt = harness.getState({
+      scopeKind: "instance",
+      stateKey: "last-comment-sync-error-at",
+    });
+    expect(typeof errorAt).toBe("string");
+
+    const errorMsg = harness.getState({
+      scopeKind: "instance",
+      stateKey: "last-comment-sync-error",
+    });
+    expect(typeof errorMsg).toBe("string");
+  });
+});

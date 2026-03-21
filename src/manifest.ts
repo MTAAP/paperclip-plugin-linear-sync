@@ -25,6 +25,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "plugin.state.read",
     "plugin.state.write",
     "activity.log.write",
+    "agents.invoke",
     "agent.tools.register",
     "instance.settings.register",
     "ui.page.register",
@@ -107,6 +108,12 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "boolean",
         title: "Enable Priority Sync",
         description: "Sync issue priority between Linear and Paperclip.",
+        default: true,
+      },
+      agentAutoInvokeEnabled: {
+        type: "boolean",
+        title: "Auto-Invoke Agents",
+        description: "Automatically invoke the assigned agent when a new issue is synced or an issue's status changes to an active state (in_progress, in_review).",
         default: true,
       },
       linearTeamFilter: {

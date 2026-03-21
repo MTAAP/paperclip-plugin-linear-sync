@@ -4,7 +4,7 @@ import manifest from "../src/manifest.js";
 import plugin from "../src/worker.js";
 import { resolveProjectId } from "../src/sync/project-router.js";
 import type { LinearIssue, LinearConnection, LinearComment } from "../src/linear-types.js";
-import type { Company, PluginCapability } from "@paperclipai/plugin-sdk";
+import type { Company, PluginCapability, Agent } from "@paperclipai/plugin-sdk";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -863,7 +863,7 @@ describe("linear-poll: mapped assignee mode", () => {
     expect(createdWithAssignee).toBeUndefined();
   });
 
-  it("warns when mapped mode has empty linearUserAgentMapping", async () => {
+  it("warns when mapped mode has empty linearUserAgentMapping (validation)", async () => {
     if (!plugin.definition.onValidateConfig) throw new Error("onValidateConfig not defined");
     const result = await plugin.definition.onValidateConfig({
       linearApiKeyRef: "secret:key",
@@ -874,5 +874,246 @@ describe("linear-poll: mapped assignee mode", () => {
     });
     expect(result.ok).toBe(true);
     expect((result.warnings ?? []).some((w) => w.includes("linearUserAgentMapping"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agent auto-invoke tests
+// ---------------------------------------------------------------------------
+
+function seedAgent(harness: TestHarness, agentId: string): void {
+  harness.seed({
+    agents: [
+      {
+        id: agentId,
+        companyId: COMPANY_ID,
+        name: "Test Agent",
+        role: "engineer" as Agent["role"],
+        title: null,
+        icon: null,
+        status: "active",
+        reportsTo: null,
+        capabilities: null,
+        adapterType: "claude_local" as Agent["adapterType"],
+        adapterConfig: {},
+        runtimeConfig: {},
+        budgetMonthlyCents: 0,
+        spentMonthlyCents: 0,
+        pauseReason: null,
+        pausedAt: null,
+        permissions: { canCreateAgents: false },
+        lastHeartbeatAt: null,
+        metadata: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        urlKey: "test-agent",
+      },
+    ],
+  });
+}
+
+describe("linear-poll: agent auto-invoke — new issues", () => {
+  it("invokes agent when a new issue is created with an assignee", async () => {
+    const harness = makeHarness(BASE_CONFIG);
+    await plugin.definition.setup(harness.ctx);
+    seedAgent(harness, "agent-default-1");
+
+    // Spy on agents.invoke
+    const invokeSpy = vi.spyOn(harness.ctx.agents, "invoke");
+
+    const issue = makeLinearIssue();
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([issue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    // Set a cursor so this is NOT a full scan
+    await harness.ctx.state.set({ scopeKind: "instance", stateKey: "poll-cursor" }, "2026-03-19T00:00:00.000Z");
+
+    await harness.runJob("linear-poll");
+
+    expect(invokeSpy).toHaveBeenCalledOnce();
+    expect(invokeSpy).toHaveBeenCalledWith(
+      "agent-default-1",
+      COMPANY_ID,
+      expect.objectContaining({
+        prompt: expect.stringContaining("ENG-1"),
+        reason: "New issue synced from Linear",
+      }),
+    );
+  });
+
+  it("does NOT invoke agent during a full scan (cursor=null)", async () => {
+    const harness = makeHarness(BASE_CONFIG);
+    await plugin.definition.setup(harness.ctx);
+    seedAgent(harness, "agent-default-1");
+
+    const invokeSpy = vi.spyOn(harness.ctx.agents, "invoke");
+
+    const issue = makeLinearIssue();
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([issue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    // No poll-cursor set → full scan
+    await harness.runJob("linear-poll");
+
+    expect(invokeSpy).not.toHaveBeenCalled();
+    expect(harness.logs.some((l) => l.message.includes("full scan"))).toBe(true);
+  });
+
+  it("does NOT invoke agent when agentAutoInvokeEnabled is false", async () => {
+    const harness = makeHarness({ ...BASE_CONFIG, agentAutoInvokeEnabled: false });
+    await plugin.definition.setup(harness.ctx);
+    seedAgent(harness, "agent-default-1");
+
+    const invokeSpy = vi.spyOn(harness.ctx.agents, "invoke");
+
+    const issue = makeLinearIssue();
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([issue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.ctx.state.set({ scopeKind: "instance", stateKey: "poll-cursor" }, "2026-03-19T00:00:00.000Z");
+
+    await harness.runJob("linear-poll");
+
+    expect(invokeSpy).not.toHaveBeenCalled();
+    expect(harness.logs.some((l) => l.message.includes("agentAutoInvokeEnabled is false"))).toBe(true);
+  });
+
+  it("continues sync when ctx.agents.invoke() throws", async () => {
+    const harness = makeHarness(BASE_CONFIG);
+    await plugin.definition.setup(harness.ctx);
+    seedAgent(harness, "agent-default-1");
+
+    // Make invoke throw
+    vi.spyOn(harness.ctx.agents, "invoke").mockRejectedValue(new Error("Agent unavailable"));
+
+    const issue = makeLinearIssue();
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([issue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.ctx.state.set({ scopeKind: "instance", stateKey: "poll-cursor" }, "2026-03-19T00:00:00.000Z");
+
+    // Should not throw
+    await expect(harness.runJob("linear-poll")).resolves.not.toThrow();
+
+    // Sync should still have completed — issue was created and activity logged
+    expect(harness.activity.length).toBeGreaterThan(0);
+    expect(harness.activity[0].message).toMatch(/1 new/);
+    // Warning should be logged
+    expect(harness.logs.some((l) => l.message.includes("failed to invoke agent"))).toBe(true);
+  });
+});
+
+describe("linear-poll: agent auto-invoke — status transitions on existing issues", () => {
+  /**
+   * Helper: run an initial poll to create an issue, then run a second poll
+   * where the Linear issue has a new status. Returns the invoke spy.
+   */
+  async function setupExistingIssueWithStatusChange(opts: {
+    initialStateName: string;
+    newStateName: string;
+    config?: Record<string, unknown>;
+  }) {
+    const config = {
+      ...BASE_CONFIG,
+      statusMapping: {
+        Todo: "todo",
+        "In Progress": "in_progress",
+        "In Review": "in_review",
+        Done: "done",
+        Cancelled: "cancelled",
+        Backlog: "backlog",
+      },
+      ...opts.config,
+    };
+    const harness = makeHarness(config);
+    await plugin.definition.setup(harness.ctx);
+    seedAgent(harness, "agent-default-1");
+
+    // First poll: create the issue with the initial status (full scan — no cursor)
+    const initialIssue = makeLinearIssue({
+      state: { id: "state-init", name: opts.initialStateName, type: "unstarted", color: "#eee", description: null, team: { id: "team-1", name: "Engineering" } },
+    });
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([initialIssue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    // Now set up second poll: same Linear issue with new status
+    // poll-cursor was set by the first poll, so this is NOT a full scan
+    const updatedIssue = makeLinearIssue({
+      state: { id: "state-new", name: opts.newStateName, type: "started", color: "#ffd700", description: null, team: { id: "team-1", name: "Engineering" } },
+      updatedAt: "2026-03-20T12:00:00.000Z", // newer than first poll
+    });
+
+    const invokeSpy = vi.spyOn(harness.ctx.agents, "invoke");
+
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([updatedIssue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    return { invokeSpy, harness };
+  }
+
+  it("invokes agent when status transitions to in_progress", async () => {
+    const { invokeSpy, harness } = await setupExistingIssueWithStatusChange({
+      initialStateName: "Todo",
+      newStateName: "In Progress",
+    });
+
+    expect(invokeSpy).toHaveBeenCalledOnce();
+    expect(invokeSpy).toHaveBeenCalledWith(
+      "agent-default-1",
+      COMPANY_ID,
+      expect.objectContaining({
+        reason: expect.stringContaining("in_progress"),
+      }),
+    );
+  });
+
+  it("invokes agent when status transitions to in_review", async () => {
+    const { invokeSpy } = await setupExistingIssueWithStatusChange({
+      initialStateName: "In Progress",
+      newStateName: "In Review",
+    });
+
+    expect(invokeSpy).toHaveBeenCalledOnce();
+    expect(invokeSpy).toHaveBeenCalledWith(
+      "agent-default-1",
+      COMPANY_ID,
+      expect.objectContaining({
+        reason: expect.stringContaining("in_review"),
+      }),
+    );
+  });
+
+  it("does NOT invoke agent when status transitions to done", async () => {
+    const { invokeSpy } = await setupExistingIssueWithStatusChange({
+      initialStateName: "In Progress",
+      newStateName: "Done",
+    });
+
+    expect(invokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT invoke agent when status did not actually change (same value re-synced)", async () => {
+    const { invokeSpy } = await setupExistingIssueWithStatusChange({
+      initialStateName: "In Progress",
+      newStateName: "In Progress",
+    });
+
+    expect(invokeSpy).not.toHaveBeenCalled();
   });
 });

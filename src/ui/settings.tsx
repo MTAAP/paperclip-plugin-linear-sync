@@ -775,20 +775,89 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   const [testing, setTesting] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [showApiKeyRef, setShowApiKeyRef] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
   const hasUserClearedMapping = useRef(false);
 
   function set<K extends keyof PluginConfig>(key: K, value: PluginConfig[K]) {
     setConfig((c) => ({ ...c, [key]: value }));
   }
 
+  /** Detect whether a string looks like a raw Linear API key (not a UUID secret ref). */
+  function isRawApiKey(value: string): boolean {
+    return value.startsWith("lin_api_") || value.startsWith("lin_oauth_");
+  }
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /**
+   * Create a Paperclip company secret and return its UUID.
+   * Used when the user pastes a raw API key instead of a secret reference.
+   */
+  async function createSecretForApiKey(rawKey: string): Promise<string> {
+    if (!companyId) throw new Error("No company context available");
+    const created = await hostFetchJson<{ id: string }>(
+      `/api/companies/${companyId}/secrets`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name: "linear-api-key",
+          value: rawKey,
+          description: "Linear API key for the Linear Sync plugin",
+        }),
+      },
+    );
+    return created.id;
+  }
+
   async function handleTestConnection() {
-    if (!config.linearApiKeyRef) {
+    // Determine the effective key ref — either from config or the input field
+    let effectiveRef = config.linearApiKeyRef;
+
+    // If the user typed a raw API key into the input, create a secret first
+    if (apiKeyInput && isRawApiKey(apiKeyInput)) {
+      setTesting(true);
+      try {
+        const secretId = await createSecretForApiKey(apiKeyInput);
+        set("linearApiKeyRef", secretId);
+        effectiveRef = secretId;
+        setApiKeyInput("");
+        toast({ title: "API key stored as secret", tone: "success" });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        toast({ title: "Failed to store secret", body: msg, tone: "error" });
+        setTesting(false);
+        return;
+      }
+    } else if (apiKeyInput && !UUID_RE.test(apiKeyInput)) {
+      // Neither a raw key nor a UUID — treat as raw key attempt
+      setTesting(true);
+      try {
+        const secretId = await createSecretForApiKey(apiKeyInput);
+        set("linearApiKeyRef", secretId);
+        effectiveRef = secretId;
+        setApiKeyInput("");
+        toast({ title: "API key stored as secret", tone: "success" });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        toast({ title: "Failed to store secret", body: msg, tone: "error" });
+        setTesting(false);
+        return;
+      }
+    } else if (apiKeyInput && UUID_RE.test(apiKeyInput)) {
+      // User entered a UUID directly — use it as the secret ref
+      set("linearApiKeyRef", apiKeyInput);
+      effectiveRef = apiKeyInput;
+      setApiKeyInput("");
+    }
+
+    if (!effectiveRef) {
       toast({ title: "No API key configured", tone: "warn" });
       return;
     }
+
     setTesting(true);
     try {
-      const result = (await testConnection({ apiKeyRef: config.linearApiKeyRef })) as {
+      const result = (await testConnection({ apiKeyRef: effectiveRef })) as {
         success: boolean;
         userName?: string;
       };
@@ -883,17 +952,19 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
         <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 600 }}>API Key</h2>
 
         <label style={labelStyle}>
-          <span style={labelTextStyle}>Linear API Key (Secret Reference)</span>
+          <span style={labelTextStyle}>Linear API Key</span>
           <span style={helpTextStyle}>
-            Enter the name of a Paperclip company secret that contains your Linear API key.
+            {config.linearApiKeyRef
+              ? "API key is configured. Paste a new key below to replace it."
+              : "Paste your Linear personal API key. It will be securely stored as a Paperclip secret."}
           </span>
           <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
             <input
               style={{ ...inputStyle, flex: 1 }}
               type={showApiKeyRef ? "text" : "password"}
-              value={config.linearApiKeyRef ?? ""}
-              placeholder="e.g. linear-api-key"
-              onChange={(e) => set("linearApiKeyRef", e.target.value || undefined)}
+              value={apiKeyInput}
+              placeholder={config.linearApiKeyRef ? "••••••••••• (configured)" : "lin_api_…"}
+              onChange={(e) => setApiKeyInput(e.target.value)}
               autoComplete="off"
             />
             <button
@@ -916,7 +987,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
           <button
             type="button"
             style={secondaryButtonStyle}
-            disabled={testing || !config.linearApiKeyRef}
+            disabled={testing || (!config.linearApiKeyRef && !apiKeyInput)}
             onClick={handleTestConnection}
           >
             {testing ? "Testing…" : "Test Connection"}

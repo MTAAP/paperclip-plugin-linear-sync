@@ -40,8 +40,9 @@ const manifest: PaperclipPluginManifestV1 = {
     properties: {
       linearApiKeyRef: {
         type: "string",
-        title: "Linear API Key (Secret Reference)",
-        description: "Reference to a Paperclip company secret containing the Linear API key.",
+        format: "secret-ref",
+        title: "Linear API Key",
+        description: "Paperclip company secret containing the Linear API key.",
       },
       syncLabelName: {
         type: "string",

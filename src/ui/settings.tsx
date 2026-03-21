@@ -29,6 +29,7 @@ const PAPERCLIP_STATUSES = [
 
 type LinearTeam = { id: string; name: string; key: string };
 type LinearProject = { id: string; name: string; key: string };
+type LinearUser = { id: string; name: string; email: string; displayName: string; active: boolean };
 type LinearWorkflowState = { id: string; name: string; type: string };
 type PaperclipAgent = { id: string; name: string; title?: string | null; role?: string | null };
 type PaperclipProject = { id: string; name: string };
@@ -38,15 +39,17 @@ type LinearProjectsData = { projects: LinearProject[]; error?: string };
 type WorkflowStatesData = { states: LinearWorkflowState[]; error?: string };
 type AgentsData = { agents: PaperclipAgent[]; error?: string };
 type ProjectsData = { projects: PaperclipProject[]; error?: string };
+type LinearUsersData = { users: LinearUser[]; error?: string };
 type ConnectionStatusData = { apiKeyValid: boolean; configured: boolean; checkedAt: string | null };
 
 type PluginConfig = {
   linearApiKeyRef?: string;
   syncLabelName?: string;
   pollIntervalSeconds?: number;
-  assigneeMode?: "issue_manager" | "fixed_agent" | "mapped";
-  issueManagerAgentId?: string;
+  assigneeMode?: "fixed_agent" | "mapped";
   defaultAssigneeAgentId?: string;
+  linearUserAgentMapping?: Record<string, string>;
+  mappedFallbackAgentId?: string;
   statusMapping?: Record<string, string>;
   syncDirection?: "bidirectional" | "linear_to_paperclip" | "paperclip_to_linear";
   commentSyncEnabled?: boolean;
@@ -62,7 +65,8 @@ type PluginConfig = {
 const DEFAULT_CONFIG: PluginConfig = {
   syncLabelName: "Paperclip",
   pollIntervalSeconds: 60,
-  assigneeMode: "issue_manager",
+  assigneeMode: "fixed_agent",
+  linearUserAgentMapping: {},
   syncDirection: "bidirectional",
   commentSyncEnabled: true,
   prioritySyncEnabled: true,
@@ -616,6 +620,129 @@ function LinearProjectMappingEditor({
 }
 
 // ---------------------------------------------------------------------------
+// LinearUserAgentMappingEditor
+// ---------------------------------------------------------------------------
+
+type LinearUserAgentMappingEditorProps = {
+  linearUsers: LinearUser[];
+  linearUsersLoading: boolean;
+  agents: PaperclipAgent[];
+  agentsLoading: boolean;
+  mapping: Record<string, string>;
+  fallbackAgentId: string | undefined;
+  onChange: (mapping: Record<string, string>) => void;
+  onFallbackChange: (agentId: string | undefined) => void;
+};
+
+function LinearUserAgentMappingEditor({
+  linearUsers,
+  linearUsersLoading,
+  agents,
+  agentsLoading,
+  mapping,
+  fallbackAgentId,
+  onChange,
+  onFallbackChange,
+}: LinearUserAgentMappingEditorProps) {
+  if (linearUsersLoading) {
+    return <div style={helpTextStyle}>Loading Linear users…</div>;
+  }
+
+  if (linearUsers.length === 0) {
+    return (
+      <div style={helpTextStyle}>
+        No Linear users found. Configure your API key and test the connection first.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "12px" }}>
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            <th style={thStyle}>Linear User</th>
+            <th style={thStyle}>Paperclip Agent</th>
+            <th style={{ ...thStyle, width: 80 }}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {linearUsers.map((user) => {
+            const mapped = mapping[user.id];
+            return (
+              <tr key={user.id}>
+                <td style={tdStyle}>
+                  <span style={{ fontWeight: 500 }}>{user.displayName || user.name}</span>
+                  <span style={{ ...helpTextStyle, marginLeft: 6 }}>{user.email}</span>
+                </td>
+                <td style={tdStyle}>
+                  {agentsLoading ? (
+                    <span style={helpTextStyle}>Loading…</span>
+                  ) : (
+                    <select
+                      style={selectStyle}
+                      value={mapped ?? ""}
+                      onChange={(e) => {
+                        const next = { ...mapping };
+                        if (e.target.value) {
+                          next[user.id] = e.target.value;
+                        } else {
+                          delete next[user.id];
+                        }
+                        onChange(next);
+                      }}
+                    >
+                      <option value="">— not mapped —</option>
+                      {agents.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                          {a.title ? ` (${a.title})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </td>
+                <td style={tdStyle}>
+                  {mapped ? (
+                    <span style={{ color: "var(--success, #16a34a)", fontSize: 12 }}>✓ mapped</span>
+                  ) : (
+                    <span style={{ color: "var(--warning, #d97706)", fontSize: 12 }}>unmapped</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <label style={labelStyle}>
+        <span style={labelTextStyle}>Fallback agent</span>
+        <span style={helpTextStyle}>
+          Issues from unmapped or unassigned Linear users go here. If unset, unassigned issues have no Paperclip assignee.
+        </span>
+        {agentsLoading ? (
+          <span style={helpTextStyle}>Loading…</span>
+        ) : (
+          <select
+            style={selectStyle}
+            value={fallbackAgentId ?? ""}
+            onChange={(e) => onFallbackChange(e.target.value || undefined)}
+          >
+            <option value="">— no fallback —</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+                {a.title ? ` (${a.title})` : ""}
+              </option>
+            ))}
+          </select>
+        )}
+      </label>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main settings page
 // ---------------------------------------------------------------------------
 
@@ -627,6 +754,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   // Data fetching
   const teamsResult = usePluginData<TeamsData>("linear-teams");
   const linearProjectsResult = usePluginData<LinearProjectsData>("linear-projects");
+  const linearUsersResult = usePluginData<LinearUsersData>("linear-users");
   const projectsResult = usePluginData<ProjectsData>("paperclip-projects", {
     companyId: companyId ?? undefined,
   });
@@ -673,9 +801,15 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
         connectionResult.refresh();
       }
     } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === "object" && err !== null && "message" in err
+            ? String((err as { message: unknown }).message)
+            : String(err);
       toast({
         title: "Connection failed",
-        body: err instanceof Error ? err.message : String(err),
+        body: message,
         tone: "error",
       });
     } finally {
@@ -729,6 +863,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
 
   const teams = teamsResult.data?.teams ?? [];
   const linearProjects = linearProjectsResult.data?.projects ?? [];
+  const linearUsers = linearUsersResult.data?.users ?? [];
   const projects = projectsResult.data?.projects ?? [];
   const agents = agentsResult.data?.agents ?? [];
   const workflowStates = statesResult.data?.states ?? [];
@@ -891,9 +1026,8 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
         <div style={{ display: "grid", gap: "8px" }}>
           {(
             [
-              { value: "issue_manager", label: "Issue Manager", help: "Route all incoming issues to a triage agent" },
               { value: "fixed_agent", label: "Fixed Agent", help: "Assign all issues to a single agent" },
-              { value: "mapped", label: "Mapped", help: "Use a custom assignment mapping" },
+              { value: "mapped", label: "Mapped", help: "Map Linear users to Paperclip agents" },
             ] as const
           ).map(({ value, label, help }) => (
             <label key={value} style={radioRowStyle}>
@@ -912,25 +1046,6 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
           ))}
         </div>
 
-        {config.assigneeMode === "issue_manager" && (
-          <label style={labelStyle}>
-            <span style={labelTextStyle}>Issue Manager Agent</span>
-            <select
-              style={selectStyle}
-              value={config.issueManagerAgentId ?? ""}
-              onChange={(e) => set("issueManagerAgentId", e.target.value || undefined)}
-            >
-              <option value="">— select agent —</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                  {a.title ? ` (${a.title})` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-
         {config.assigneeMode === "fixed_agent" && (
           <label style={labelStyle}>
             <span style={labelTextStyle}>Default Assignee Agent</span>
@@ -948,6 +1063,19 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
               ))}
             </select>
           </label>
+        )}
+
+        {config.assigneeMode === "mapped" && (
+          <LinearUserAgentMappingEditor
+            linearUsers={linearUsers}
+            linearUsersLoading={linearUsersResult.loading}
+            agents={agents}
+            agentsLoading={agentsResult.loading}
+            mapping={config.linearUserAgentMapping ?? {}}
+            fallbackAgentId={config.mappedFallbackAgentId}
+            onChange={(m) => set("linearUserAgentMapping", m)}
+            onFallbackChange={(v) => set("mappedFallbackAgentId", v)}
+          />
         )}
       </section>
 

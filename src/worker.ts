@@ -241,11 +241,22 @@ async function registerDataHandlers(ctx: PluginContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function registerActionHandlers(ctx: PluginContext): Promise<void> {
-  // Settings — test the Linear API key connection
+  // Settings — test the Linear API key connection.
+  // Accepts either a resolved secret ref (`apiKeyRef`) or a raw key
+  // (`rawApiKey`) so the UI can test before saving config.
   ctx.actions.register("test-connection", async (params) => {
     const apiKeyRef = typeof params.apiKeyRef === "string" ? params.apiKeyRef : null;
-    if (!apiKeyRef) throw new Error("apiKeyRef is required");
-    const apiKey = await ctx.secrets.resolve(apiKeyRef);
+    const rawApiKey = typeof params.rawApiKey === "string" ? params.rawApiKey : null;
+
+    let apiKey: string;
+    if (rawApiKey) {
+      apiKey = rawApiKey;
+    } else if (apiKeyRef) {
+      apiKey = await ctx.secrets.resolve(apiKeyRef);
+    } else {
+      throw new Error("apiKeyRef or rawApiKey is required");
+    }
+
     const client = new LinearClient(apiKey);
     const viewer = await client.fetchViewer();
     await ctx.state.set({ scopeKind: "instance", stateKey: "api-key-valid" }, true);

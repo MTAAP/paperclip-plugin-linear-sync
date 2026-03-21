@@ -820,48 +820,62 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   }
 
   async function handleTestConnection() {
+    const rawKey = apiKeyInput.trim();
+
+    // Need either a new key in the input or an existing configured ref
+    if (!rawKey && !config.linearApiKeyRef) {
+      toast({ title: "No API key provided", tone: "warn" });
+      return;
+    }
+
     setTesting(true);
     try {
-      let effectiveRef = config.linearApiKeyRef;
+      // Test the connection first — before saving anything.
+      // If user pasted a raw key, send it directly to avoid needing
+      // a saved config (which may fail schema validation during upgrades).
+      const actionParams = rawKey
+        ? { rawApiKey: rawKey }
+        : { apiKeyRef: config.linearApiKeyRef };
 
-      // If the user typed something into the input, create a secret for it
-      if (apiKeyInput.trim()) {
-        const secretId = await storeApiKeySecret(apiKeyInput.trim());
-        effectiveRef = secretId;
-        setApiKeyInput("");
-      }
-
-      if (!effectiveRef) {
-        toast({ title: "No API key provided", tone: "warn" });
-        setTesting(false);
-        return;
-      }
-
-      // Save only the linearApiKeyRef into the server's existing config.
-      // We fetch the server config fresh to avoid overwriting fields with local
-      // defaults that may not match the current manifest schema.
-      const serverState = await hostFetchJson<{ configJson?: Record<string, unknown> | null }>(
-        `/api/plugins/${PLUGIN_ID}/config`,
-      );
-      const serverConfig = serverState?.configJson ?? {};
-      await hostFetchJson(`/api/plugins/${PLUGIN_ID}/config`, {
-        method: "POST",
-        body: JSON.stringify({ configJson: { ...serverConfig, linearApiKeyRef: effectiveRef } }),
-      });
-      set("linearApiKeyRef", effectiveRef);
-
-      const result = (await testConnection({ apiKeyRef: effectiveRef })) as {
+      const result = (await testConnection(actionParams)) as {
         success: boolean;
         userName?: string;
       };
-      if (result?.success) {
-        toast({
-          title: "Connection successful",
-          body: result.userName ? `Authenticated as ${result.userName}` : undefined,
-          tone: "success",
-        });
-        connectionResult.refresh();
+
+      if (!result?.success) {
+        toast({ title: "Connection failed", tone: "error" });
+        return;
       }
+
+      // Connection succeeded — now store the secret and save config
+      if (rawKey) {
+        const secretId = await storeApiKeySecret(rawKey);
+        setApiKeyInput("");
+
+        // Patch only linearApiKeyRef into the server's existing config.
+        // Also fix any legacy field values that no longer match the schema.
+        const serverState = await hostFetchJson<{ configJson?: Record<string, unknown> | null }>(
+          `/api/plugins/${PLUGIN_ID}/config`,
+        );
+        const serverConfig = { ...serverState?.configJson ?? {} };
+        const validAssigneeModes = ["fixed_agent", "mapped"];
+        if (serverConfig.assigneeMode && !validAssigneeModes.includes(serverConfig.assigneeMode as string)) {
+          serverConfig.assigneeMode = "fixed_agent";
+        }
+        serverConfig.linearApiKeyRef = secretId;
+        await hostFetchJson(`/api/plugins/${PLUGIN_ID}/config`, {
+          method: "POST",
+          body: JSON.stringify({ configJson: serverConfig }),
+        });
+        set("linearApiKeyRef", secretId);
+      }
+
+      toast({
+        title: "Connection successful",
+        body: result.userName ? `Authenticated as ${result.userName}` : undefined,
+        tone: "success",
+      });
+      connectionResult.refresh();
     } catch (err) {
       const message =
         err instanceof Error

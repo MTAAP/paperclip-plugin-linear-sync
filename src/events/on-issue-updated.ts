@@ -16,7 +16,7 @@ interface IssueUpdatedPayload {
 }
 
 interface IssueUpdatedEvent {
-  entityId: string;
+  entityId?: string;
   payload: IssueUpdatedPayload;
 }
 

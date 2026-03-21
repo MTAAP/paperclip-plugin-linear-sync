@@ -32,7 +32,7 @@
     "url": "https://github.com/MTAAP/paperclip-plugin-linear-sync.git"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "^1.0.0"
+    "@paperclipai/plugin-sdk": "^2026.318.0"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^16.0.1",

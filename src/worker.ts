@@ -3,6 +3,7 @@ import {
   runWorker,
   type PluginConfigValidationResult,
   type PluginContext,
+  type PluginEvent,
   type PluginHealthDiagnostics,
   type PluginJobContext,
 } from "@paperclipai/plugin-sdk";
@@ -38,18 +39,18 @@ function registerJobs(ctx: PluginContext): void {
 
 async function registerEventHandlers(ctx: PluginContext): Promise<void> {
   // Paperclip → Linear: push status/priority changes
-  ctx.events.on("issue.updated", async (event: { entityId: string; payload: Record<string, unknown> }) => {
+  ctx.events.on("issue.updated", async (event: PluginEvent) => {
     try {
-      await handleIssueUpdated(ctx, event);
+      await handleIssueUpdated(ctx, event as { entityId?: string; payload: Record<string, unknown> });
     } catch (err) {
       ctx.logger.error("issue.updated: unhandled error", { error: String(err) });
     }
   });
 
   // Paperclip → Linear: post comment on linked Linear issue
-  ctx.events.on("issue.comment.created", async (event: { entityId: string; payload: Record<string, unknown> }) => {
+  ctx.events.on("issue.comment.created", async (event: PluginEvent) => {
     try {
-      await handleCommentCreated(ctx, event);
+      await handleCommentCreated(ctx, event as { entityId?: string; payload: Record<string, unknown> });
     } catch (err) {
       ctx.logger.error("issue.comment.created: unhandled error", { error: String(err) });
     }

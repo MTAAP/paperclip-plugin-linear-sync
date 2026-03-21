@@ -1,2 +1,2 @@
-export { manifest } from "./manifest.js";
-export { setup } from "./worker.js";
+export { default as manifest } from "./manifest.js";
+export { default as setup } from "./worker.js";

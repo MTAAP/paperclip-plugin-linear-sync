@@ -27,7 +27,7 @@ interface CommentCreatedPayload {
 }
 
 interface CommentCreatedEvent {
-  entityId: string;
+  entityId?: string;
   payload: CommentCreatedPayload;
 }
 

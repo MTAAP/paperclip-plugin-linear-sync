@@ -574,7 +574,7 @@ describe("issue.comment.created — comment push", () => {
           spentMonthlyCents: 0,
           pauseReason: null,
           pausedAt: null,
-          permissions: {},
+          permissions: { canCreateAgents: false },
           lastHeartbeatAt: null,
           metadata: null,
           createdAt: new Date(),

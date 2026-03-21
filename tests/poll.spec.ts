@@ -465,6 +465,66 @@ describe("linear-poll job", () => {
     expect(harness.logs.some((l) => l.message.includes("linearApiKeyRef not configured"))).toBe(true);
   });
 
+  it("does not re-post comments already recorded in synced-comment-ids (dedup safety net)", async () => {
+    const harness = makeHarness(BASE_CONFIG);
+    await plugin.definition.setup(harness.ctx);
+
+    const issue = makeLinearIssue();
+    const comment: LinearComment = {
+      id: "comment-dedup-1",
+      body: "This comment should only appear once.",
+      createdAt: "2026-03-20T11:00:00.000Z",
+      updatedAt: "2026-03-20T11:00:00.000Z",
+      user: { id: "user-1", name: "Alice", email: "alice@example.com", displayName: "Alice" },
+    };
+
+    // First poll: creates issue and syncs the comment (endCursor is null so
+    // cursor is not saved, simulating the state that would allow a re-fetch).
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () =>
+          callCount === 1 ? issuesByLabelResponse([issue]) : commentsResponse([comment]),
+      };
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+    expect(harness.activity.slice(-1)[0].message).toMatch(/1 comments synced/);
+
+    // Track createComment calls on the second poll
+    let commentCreated = 0;
+    const origCreate = harness.ctx.issues.createComment.bind(harness.ctx.issues);
+    (harness.ctx.issues as unknown as Record<string, unknown>).createComment = async (
+      ...args: unknown[]
+    ) => {
+      commentCreated++;
+      return origCreate(...(args as Parameters<typeof origCreate>));
+    };
+
+    // Second poll: Linear returns the same comment again (cursor was null so
+    // no cursor-based skip). Deduplication must prevent re-posting.
+    let callCount2 = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      callCount2++;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () =>
+          callCount2 === 1 ? issuesByLabelResponse([issue]) : commentsResponse([comment]),
+      };
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    expect(commentCreated).toBe(0);
+    expect(harness.activity.slice(-1)[0].message).toMatch(/0 comments synced/);
+  });
+
   it("handles Linear rate limiting gracefully (does not throw)", async () => {
     const harness = makeHarness(BASE_CONFIG);
     await plugin.definition.setup(harness.ctx);

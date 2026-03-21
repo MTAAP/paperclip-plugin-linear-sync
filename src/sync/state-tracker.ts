@@ -100,6 +100,33 @@ export class StateTracker {
   }
 
   // ---------------------------------------------------------------------------
+  // Per-issue synced comment IDs (deduplication safety net)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get the set of Linear comment IDs that have already been synced to
+   * Paperclip for a given issue. Used to prevent re-posting comments when
+   * the comment cursor is lost or corrupted.
+   */
+  async getSyncedCommentIds(issueId: string): Promise<Set<string>> {
+    const value = await this.ctx.state.get({
+      scopeKind: "issue",
+      scopeId: issueId,
+      stateKey: "synced-comment-ids",
+    });
+    if (Array.isArray(value)) return new Set(value as string[]);
+    return new Set();
+  }
+
+  /** Persist the updated set of synced Linear comment IDs for an issue. */
+  async setSyncedCommentIds(issueId: string, ids: Set<string>): Promise<void> {
+    await this.ctx.state.set(
+      { scopeKind: "issue", scopeId: issueId, stateKey: "synced-comment-ids" },
+      Array.from(ids),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // API key health (instance-scoped)
   // ---------------------------------------------------------------------------
 

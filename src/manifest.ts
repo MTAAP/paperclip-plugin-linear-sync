@@ -1,0 +1,31 @@
+import type { PluginManifest } from "@paperclipai/plugin-sdk";
+
+export const manifest: PluginManifest = {
+  id: "paperclip.linear-sync",
+  name: "Linear Sync",
+  version: "0.1.0",
+  apiVersion: 1,
+  categories: ["connector"],
+  capabilities: [
+    "events.subscribe",
+    "issues.read",
+    "issues.create",
+    "issues.update",
+    "issue.comments.read",
+    "issue.comments.create",
+    "projects.read",
+    "agents.read",
+    "goals.read",
+    "jobs.schedule",
+    "http.outbound",
+    "secrets.read-ref",
+    "plugin.state.read",
+    "plugin.state.write",
+    "activity.log.write",
+    "agent.tools.register",
+    "instance.settings.register",
+    "ui.page.register",
+    "ui.detailTab.register",
+    "ui.dashboardWidget.register",
+  ],
+};

@@ -113,11 +113,9 @@ export class LinearRateLimitError extends Error {
 }
 
 export class LinearNetworkError extends Error {
-  readonly cause: unknown;
   constructor(message: string, cause?: unknown) {
-    super(message);
+    super(message, { cause });
     this.name = "LinearNetworkError";
-    this.cause = cause;
   }
 }
 

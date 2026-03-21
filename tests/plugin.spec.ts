@@ -20,8 +20,8 @@ describe("paperclip-plugin-linear", () => {
     await plugin.definition.setup(harness.ctx);
 
     const health = await harness.getData<{ status: string; apiKeyValid: boolean }>("health");
-    expect(health.status).toBe("ok");
-    expect(health.apiKeyValid).toBe(true);
+    expect(health.status).toBe("unknown");
+    expect(health.apiKeyValid).toBe(false);
   });
 
   it("health data returns error status when api-key-valid is false", async () => {

@@ -238,17 +238,27 @@ export class LinearClient {
    */
   async fetchTeams(): Promise<LinearTeam[]> {
     const query = `
-      query FetchTeams {
-        teams(first: 100) {
+      query FetchTeams($first: Int, $after: String) {
+        teams(first: $first, after: $after) {
           nodes {
             id name key description color
           }
+          ${PAGE_INFO_FRAGMENT}
         }
       }
     `;
 
-    const data = await this.request<{ teams: LinearConnection<LinearTeam> }>(query);
-    return data.teams.nodes;
+    const all: LinearTeam[] = [];
+    let after: string | null = null;
+    let hasNext = true;
+    while (hasNext) {
+      const data: { teams: LinearConnection<LinearTeam> } =
+        await this.request(query, { first: 100, after });
+      all.push(...data.teams.nodes);
+      hasNext = data.teams.pageInfo.hasNextPage;
+      after = data.teams.pageInfo.endCursor;
+    }
+    return all;
   }
 
   /**
@@ -256,17 +266,27 @@ export class LinearClient {
    */
   async fetchProjects(): Promise<LinearProject[]> {
     const query = `
-      query FetchProjects {
-        projects(first: 100) {
+      query FetchProjects($first: Int, $after: String) {
+        projects(first: $first, after: $after) {
           nodes {
             id name key description color
           }
+          ${PAGE_INFO_FRAGMENT}
         }
       }
     `;
 
-    const data = await this.request<{ projects: LinearConnection<LinearProject> }>(query);
-    return data.projects.nodes;
+    const all: LinearProject[] = [];
+    let after: string | null = null;
+    let hasNext = true;
+    while (hasNext) {
+      const data: { projects: LinearConnection<LinearProject> } =
+        await this.request(query, { first: 100, after });
+      all.push(...data.projects.nodes);
+      hasNext = data.projects.pageInfo.hasNextPage;
+      after = data.projects.pageInfo.endCursor;
+    }
+    return all;
   }
 
   /**

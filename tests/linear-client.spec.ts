@@ -227,7 +227,12 @@ describe("LinearClient", () => {
   describe("fetchTeams", () => {
     it("returns teams array", async () => {
       const team = { id: "team_1", name: "Engineering", key: "ENG", description: null, color: null };
-      const fetch = makeFetch(200, gqlOk({ teams: { nodes: [team] } }));
+      const fetch = makeFetch(200, gqlOk({
+        teams: {
+          nodes: [team],
+          pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
+        },
+      }));
       const client = new LinearClient("lin_api_key", fetch);
       const teams = await client.fetchTeams();
       expect(teams).toHaveLength(1);

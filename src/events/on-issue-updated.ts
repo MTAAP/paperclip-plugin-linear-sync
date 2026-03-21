@@ -96,9 +96,9 @@ export async function handleIssueUpdated(
 
   let pushed = false;
 
-  try {
-    // 8. Status sync
-    if (statusChanged) {
+  // 8. Status sync
+  if (statusChanged) {
+    try {
       // Retrieve the team ID from the entity metadata to fetch workflow states
       const entities = await ctx.entities.list({
         entityType: "linear-issue",
@@ -139,10 +139,25 @@ export async function handleIssueUpdated(
           linearIssueId,
         });
       }
+    } catch (err) {
+      if (err instanceof LinearRateLimitError) {
+        ctx.logger.warn("issue.updated: rate limited on status sync, deferring", {
+          issueId,
+          retryAfterSeconds: err.retryAfterSeconds,
+        });
+      } else {
+        ctx.logger.error("issue.updated: failed to push status to Linear", {
+          issueId,
+          linearIssueId,
+          error: String(err),
+        });
+      }
     }
+  }
 
-    // 9. Priority sync
-    if (priorityChanged) {
+  // 9. Priority sync
+  if (priorityChanged) {
+    try {
       const linearPriority = priorityPaperclipToLinear(payload.priority!);
 
       if (linearPriority !== null) {
@@ -155,37 +170,37 @@ export async function handleIssueUpdated(
           linearPriority,
         });
       }
-    }
-
-    // 10. Record write to prevent echo on next poll
-    if (pushed) {
-      await echoGuard.recordWrite(issueId, "paperclip");
-
-      // Log to activity feed
-      if (companyId) {
-        const parts: string[] = [];
-        if (statusChanged) parts.push(`status → ${payload.status}`);
-        if (priorityChanged) parts.push(`priority → ${payload.priority}`);
-
-        await ctx.activity.log({
-          companyId,
-          message: `Pushed issue update to Linear: ${parts.join(", ")}`,
-          metadata: { issueId, linearIssueId, fields: parts },
+    } catch (err) {
+      if (err instanceof LinearRateLimitError) {
+        ctx.logger.warn("issue.updated: rate limited on priority sync, deferring", {
+          issueId,
+          retryAfterSeconds: err.retryAfterSeconds,
+        });
+      } else {
+        ctx.logger.error("issue.updated: failed to push priority to Linear", {
+          issueId,
+          linearIssueId,
+          error: String(err),
         });
       }
     }
-  } catch (err) {
-    if (err instanceof LinearRateLimitError) {
-      ctx.logger.warn("issue.updated: rate limited, deferring", {
-        issueId,
-        retryAfterSeconds: err.retryAfterSeconds,
+  }
+
+  // 10. Record write to prevent echo on next poll
+  if (pushed) {
+    await echoGuard.recordWrite(issueId, "paperclip");
+
+    // Log to activity feed
+    if (companyId) {
+      const parts: string[] = [];
+      if (statusChanged) parts.push(`status → ${payload.status}`);
+      if (priorityChanged) parts.push(`priority → ${payload.priority}`);
+
+      await ctx.activity.log({
+        companyId,
+        message: `Pushed issue update to Linear: ${parts.join(", ")}`,
+        metadata: { issueId, linearIssueId, fields: parts },
       });
-      return;
     }
-    ctx.logger.error("issue.updated: failed to push update to Linear", {
-      issueId,
-      linearIssueId,
-      error: String(err),
-    });
   }
 }

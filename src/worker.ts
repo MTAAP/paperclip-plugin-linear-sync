@@ -67,8 +67,8 @@ async function registerDataHandlers(ctx: PluginContext): Promise<void> {
     const apiKeyValid = await ctx.state.get({ scopeKind: "instance", stateKey: "api-key-valid" });
     const lastPoll = await ctx.state.get({ scopeKind: "instance", stateKey: "last-poll-at" });
     return {
-      status: apiKeyValid === false ? "error" : "ok",
-      apiKeyValid: apiKeyValid !== false,
+      status: apiKeyValid === true ? "ok" : apiKeyValid === false ? "error" : "unknown",
+      apiKeyValid: apiKeyValid === true,
       lastPollAt: lastPoll ?? null,
       checkedAt: new Date().toISOString(),
     };
@@ -352,14 +352,6 @@ const plugin = definePlugin({
 
     const warnings: string[] = [];
     const typed = result.data;
-
-    if (typed.pollIntervalSeconds < 30) {
-      return {
-        ok: false,
-        errors: ["pollIntervalSeconds must be at least 30"],
-        warnings,
-      };
-    }
 
     // Validate project routing config — only when explicitly provided
     if ("projectRoutingMode" in config && typed.projectRoutingMode === "single") {

@@ -153,8 +153,8 @@ export class StateTracker {
       scopeId: issueId,
       stateKey: "synced-comment-ids",
     });
-    if (Array.isArray(value)) return new Set(value as string[]);
-    return new Set();
+    if (!Array.isArray(value)) return new Set();
+    return new Set(value.filter((v): v is string => typeof v === "string"));
   }
 
   /** Persist the updated set of synced Linear comment IDs for an issue. */

@@ -254,13 +254,16 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
           await ctx.issues.update(newIssue.id, { status: pcStatus as Issue["status"] }, companyId);
         }
 
+        // Record echo guard *before* link so any event triggered by the
+        // status update above is suppressed.
+        await echoGuard.recordWrite(newIssue.id, "linear");
+
         await entityMapper.linkIssue(issue.id, newIssue.id, {
           linearTitle: issue.title,
           linearUrl: issue.url,
           linearTeamId: issue.team.id,
         });
 
-        await echoGuard.recordWrite(newIssue.id, "linear");
         newCount++;
 
         ctx.logger.debug("linear-poll: created Paperclip issue", {
@@ -305,11 +308,13 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
     paginationCursor = page.pageInfo.endCursor ?? undefined;
   }
 
-  // 7. Sync comments for all linked issues
+  // 7. Sync comments only for issues seen in this poll cycle (avoids O(N) API
+  //    calls across all linked issues every cycle).
   let commentSyncCount = 0;
-  if (config.commentSyncEnabled) {
+  if (config.commentSyncEnabled && seenLinearIds.size > 0) {
     const linkedIssues = await entityMapper.listLinkedIssues({ limit: 200 });
     for (const linked of linkedIssues) {
+      if (!seenLinearIds.has(linked.linearIssueId)) continue;
       try {
         const count = await syncComments(
           ctx,

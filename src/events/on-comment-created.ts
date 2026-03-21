@@ -134,14 +134,16 @@ export async function handleCommentCreated(
       authorName,
     });
 
-    // 9. Advance comment cursor to avoid re-importing this comment on next poll
+    // 9. Preserve existing comment cursor — do NOT create a new one.
+    // Cursors must only come from Linear's pageInfo.endCursor (opaque base64
+    // strings). ISO timestamps are invalid GraphQL cursors and must never be
+    // used as a fallback. If no cursor exists, the poll job will start from
+    // the beginning; echo detection (VIA_PAPERCLIP_PATTERN) prevents re-import.
     const stateTracker = new StateTracker(ctx);
     const currentCursor = await stateTracker.getCommentCursor(issueId);
-    // Set a timestamp-based cursor so the poll job skips comments before now
-    await stateTracker.setCommentCursor(
-      issueId,
-      currentCursor ?? new Date().toISOString(),
-    );
+    if (currentCursor) {
+      await stateTracker.setCommentCursor(issueId, currentCursor);
+    }
 
     // 10. Log to activity feed
     const companies = await ctx.companies.list({ limit: 1 });

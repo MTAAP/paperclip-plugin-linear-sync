@@ -773,6 +773,62 @@ describe("issue.comment.created — sync direction", () => {
 });
 
 // ---------------------------------------------------------------------------
+// issue.comment.created — comment cursor handling (BUG-4)
+// ---------------------------------------------------------------------------
+
+describe("issue.comment.created — comment cursor handling", () => {
+  it("does NOT write an ISO timestamp as comment-cursor when no cursor exists", async () => {
+    const harness = makeHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    await seedLinkedIssue(harness, { paperclipId: "pc-1", linearId: "lin-1" });
+
+    globalThis.fetch = mockFetchSuccess({
+      commentCreate: { success: true, comment: { id: "c1", body: "", createdAt: "", updatedAt: "", user: null } },
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.emit("issue.comment.created", { body: "A new comment." }, { entityId: "pc-1" });
+
+    const cursor = harness.getState({
+      scopeKind: "issue",
+      scopeId: "pc-1",
+      stateKey: "comment-cursor",
+    });
+
+    // No cursor should be set — ISO timestamps are not valid GraphQL cursors
+    expect(cursor).toBeUndefined();
+  });
+
+  it("preserves an existing valid cursor after posting a comment", async () => {
+    const harness = makeHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    await seedLinkedIssue(harness, { paperclipId: "pc-1", linearId: "lin-1" });
+
+    const validCursor = "WyJjcmVhdGVkQXQiLCIyMDI0LTAxLTAxVDAwOjAwOjAwLjAwMFoiXQ==";
+    await harness.ctx.state.set(
+      { scopeKind: "issue", scopeId: "pc-1", stateKey: "comment-cursor" },
+      validCursor,
+    );
+
+    globalThis.fetch = mockFetchSuccess({
+      commentCreate: { success: true, comment: { id: "c1", body: "", createdAt: "", updatedAt: "", user: null } },
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.emit("issue.comment.created", { body: "Another comment." }, { entityId: "pc-1" });
+
+    const cursor = harness.getState({
+      scopeKind: "issue",
+      scopeId: "pc-1",
+      stateKey: "comment-cursor",
+    });
+
+    // Existing cursor must be preserved unchanged
+    expect(cursor).toBe(validCursor);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // issue.comment.created — rate limit handling
 // ---------------------------------------------------------------------------
 

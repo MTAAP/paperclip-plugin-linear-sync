@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   useHostContext,
   usePluginAction,
@@ -647,6 +647,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   const [testing, setTesting] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [showApiKeyRef, setShowApiKeyRef] = useState(false);
+  const hasUserClearedMapping = useRef(false);
 
   function set<K extends keyof PluginConfig>(key: K, value: PluginConfig[K]) {
     setConfig((c) => ({ ...c, [key]: value }));
@@ -694,9 +695,11 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
     }
   }
 
-  // Auto-populate status mapping when a team is selected and no mapping exists
+  // Auto-populate status mapping when a team is selected and no mapping exists.
+  // Skip if the user has intentionally cleared all mappings.
   useEffect(() => {
     if (
+      !hasUserClearedMapping.current &&
       statesResult.data?.states &&
       statesResult.data.states.length > 0 &&
       (!config.statusMapping || Object.keys(config.statusMapping).length === 0)
@@ -960,7 +963,10 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
           mapping={config.statusMapping ?? {}}
           workflowStates={workflowStates}
           statesLoading={statesResult.loading}
-          onChange={(m) => set("statusMapping", m)}
+          onChange={(m) => {
+            hasUserClearedMapping.current = Object.keys(m).length === 0;
+            set("statusMapping", m);
+          }}
         />
       </section>
 

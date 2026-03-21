@@ -520,6 +520,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
 
   const [testing, setTesting] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [showApiKeyRef, setShowApiKeyRef] = useState(false);
 
   function set<K extends keyof PluginConfig>(key: K, value: PluginConfig[K]) {
     setConfig((c) => ({ ...c, [key]: value }));
@@ -621,13 +622,29 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
           <span style={helpTextStyle}>
             Enter the name of a Paperclip company secret that contains your Linear API key.
           </span>
-          <input
-            style={inputStyle}
-            type="text"
-            value={config.linearApiKeyRef ?? ""}
-            placeholder="e.g. linear-api-key"
-            onChange={(e) => set("linearApiKeyRef", e.target.value || undefined)}
-          />
+          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+            <input
+              style={{ ...inputStyle, flex: 1 }}
+              type={showApiKeyRef ? "text" : "password"}
+              value={config.linearApiKeyRef ?? ""}
+              placeholder="e.g. linear-api-key"
+              onChange={(e) => set("linearApiKeyRef", e.target.value || undefined)}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              style={{
+                ...secondaryButtonStyle,
+                flexShrink: 0,
+                padding: "6px 10px",
+                fontSize: "12px",
+              }}
+              onClick={() => setShowApiKeyRef((v) => !v)}
+              title={showApiKeyRef ? "Hide" : "Show"}
+            >
+              {showApiKeyRef ? "Hide" : "Show"}
+            </button>
+          </div>
         </label>
 
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>

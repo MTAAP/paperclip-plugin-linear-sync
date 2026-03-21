@@ -452,6 +452,75 @@ describe("linear-poll job", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  // BUG-8 regression: poll must skip comments whose IDs are in synced-outbound-comment-ids
+  it("skips echoing outbound comments back to Paperclip (BUG-8)", async () => {
+    const harness = makeHarness(BASE_CONFIG);
+    await plugin.definition.setup(harness.ctx);
+
+    const issue = makeLinearIssue();
+
+    // Create the Paperclip issue so the poll's update path can find it
+    const pcIssue = await harness.ctx.issues.create({
+      companyId: COMPANY_ID,
+      projectId: "proj-001",
+      title: issue.title,
+    });
+
+    // Link the Paperclip issue to the Linear issue
+    await harness.ctx.entities.upsert({
+      entityType: "linear-issue",
+      scopeKind: "issue",
+      scopeId: pcIssue.id,
+      externalId: issue.id,
+      title: issue.title,
+      status: "linked",
+      data: {},
+    });
+
+    // Pretend we already pushed "outbound-comment-1" from Paperclip → Linear
+    await harness.ctx.state.set(
+      { scopeKind: "issue", scopeId: pcIssue.id, stateKey: "synced-outbound-comment-ids" },
+      ["outbound-comment-1"],
+    );
+
+    const outboundComment: LinearComment = {
+      id: "outbound-comment-1",
+      body: "Comment from Paperclip.",
+      createdAt: "2026-03-20T12:00:00.000Z",
+      updatedAt: "2026-03-20T12:00:00.000Z",
+      user: null,
+    };
+    const inboundComment: LinearComment = {
+      id: "inbound-comment-2",
+      body: "Genuine Linear comment.",
+      createdAt: "2026-03-20T13:00:00.000Z",
+      updatedAt: "2026-03-20T13:00:00.000Z",
+      user: { id: "user-1", name: "Alice", email: "alice@ex.com", displayName: "Alice" },
+    };
+
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () =>
+          callCount === 1
+            ? issuesByLabelResponse([issue])
+            : commentsResponse([outboundComment, inboundComment]),
+      };
+    }) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    // Only 1 comment synced (the genuine inbound one); outbound echo skipped
+    const lastActivity = harness.activity[harness.activity.length - 1];
+    expect(lastActivity.message).toContain("1 comments synced");
+    // Dedup log should confirm the skip
+    expect(harness.logs.some((l) => l.message.includes("skipping outbound comment"))).toBe(true);
+  });
+
   it("skips poll when linearApiKeyRef is not configured", async () => {
     const harness = makeHarness({ syncLabelName: "Paperclip" }); // no API key
     await plugin.definition.setup(harness.ctx);

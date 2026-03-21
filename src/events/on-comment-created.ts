@@ -126,7 +126,7 @@ export async function handleCommentCreated(
 
   // 8. Post comment to Linear
   try {
-    await linearClient.createComment(linearIssueId, formattedBody);
+    const postedComment = await linearClient.createComment(linearIssueId, formattedBody);
 
     ctx.logger.info("issue.comment.created: posted comment to Linear", {
       issueId,
@@ -134,14 +134,9 @@ export async function handleCommentCreated(
       authorName,
     });
 
-    // 9. Advance comment cursor to avoid re-importing this comment on next poll
+    // 9. Track the outbound Linear comment ID so the poll job skips it (dedup)
     const stateTracker = new StateTracker(ctx);
-    const currentCursor = await stateTracker.getCommentCursor(issueId);
-    // Set a timestamp-based cursor so the poll job skips comments before now
-    await stateTracker.setCommentCursor(
-      issueId,
-      currentCursor ?? new Date().toISOString(),
-    );
+    await stateTracker.addSyncedOutboundCommentId(issueId, postedComment.id);
 
     // 10. Log to activity feed
     const companies = await ctx.companies.list({ limit: 1 });

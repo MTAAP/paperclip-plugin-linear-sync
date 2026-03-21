@@ -100,6 +100,45 @@ export class StateTracker {
   }
 
   // ---------------------------------------------------------------------------
+  // Per-issue synced outbound comment IDs (Paperclip → Linear)
+  //
+  // Tracks Linear comment IDs that were created by this plugin when pushing
+  // Paperclip comments to Linear. The poll job uses these to skip echo-back:
+  // if a comment's Linear ID is in this set, it originated here and must not
+  // be re-imported into Paperclip.
+  // ---------------------------------------------------------------------------
+
+  private readonly MAX_SYNCED_OUTBOUND_IDS = 100;
+
+  /**
+   * Return the set of Linear comment IDs that were pushed outbound
+   * (Paperclip → Linear) for a given Paperclip issue.
+   */
+  async getSyncedOutboundCommentIds(issueId: string): Promise<Set<string>> {
+    const value = await this.ctx.state.get({
+      scopeKind: "issue",
+      scopeId: issueId,
+      stateKey: "synced-outbound-comment-ids",
+    });
+    if (!Array.isArray(value)) return new Set();
+    return new Set(value.filter((v): v is string => typeof v === "string"));
+  }
+
+  /**
+   * Record a Linear comment ID as having been pushed outbound so the poll job
+   * can skip it. Caps the stored list at MAX_SYNCED_OUTBOUND_IDS entries.
+   */
+  async addSyncedOutboundCommentId(issueId: string, linearCommentId: string): Promise<void> {
+    const existing = await this.getSyncedOutboundCommentIds(issueId);
+    const updated = [...existing, linearCommentId];
+    const trimmed = updated.slice(-this.MAX_SYNCED_OUTBOUND_IDS);
+    await this.ctx.state.set(
+      { scopeKind: "issue", scopeId: issueId, stateKey: "synced-outbound-comment-ids" },
+      trimmed,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // API key health (instance-scoped)
   // ---------------------------------------------------------------------------
 

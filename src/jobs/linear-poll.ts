@@ -55,6 +55,10 @@ async function syncComments(
   let after = cursor ?? undefined;
   let hasNext = true;
 
+  // Load IDs of comments we've already pushed outbound (Paperclip → Linear) to
+  // prevent echoing them back as inbound comments.
+  const outboundIds = await stateTracker.getSyncedOutboundCommentIds(paperclipIssueId);
+
   while (hasNext) {
     let page;
     try {
@@ -75,6 +79,15 @@ async function syncComments(
     }
 
     for (const comment of page.nodes) {
+      // Skip comments that originated from this plugin (pushed Paperclip → Linear).
+      if (outboundIds.has(comment.id)) {
+        ctx.logger.debug("linear-poll: skipping outbound comment (dedup)", {
+          linearIssueId,
+          commentId: comment.id,
+        });
+        continue;
+      }
+
       const author = comment.user?.displayName ?? comment.user?.name ?? "Linear";
       const body = `**${author}** (via Linear):\n\n${comment.body}`;
       try {

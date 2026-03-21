@@ -23,9 +23,10 @@ function buildDescription(issue: LinearIssue): string {
   return parts.join("\n\n");
 }
 
-function resolveAssignee(config: LinearSyncConfig): string | undefined {
-  if (config.assigneeMode === "issue_manager" && config.issueManagerAgentId) {
-    return config.issueManagerAgentId;
+function resolveAssignee(config: LinearSyncConfig, issue: LinearIssue): string | undefined {
+  if (config.assigneeMode === "mapped") {
+    const mappedAgentId = issue.assignee?.id ? config.linearUserAgentMapping[issue.assignee.id] : undefined;
+    return mappedAgentId ?? config.mappedFallbackAgentId;
   }
   if (config.assigneeMode === "fixed_agent" && config.defaultAssigneeAgentId) {
     return config.defaultAssigneeAgentId;
@@ -237,7 +238,7 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
 
         const pcStatus = statusLinearToPaperclip(issue.state.name, config) ?? "todo";
         const pcPriority = config.prioritySyncEnabled ? priorityLinearToPaperclip(issue.priority) : null;
-        const assigneeAgentId = resolveAssignee(config);
+        const assigneeAgentId = resolveAssignee(config, issue);
 
         const newIssue = await ctx.issues.create({
           companyId,

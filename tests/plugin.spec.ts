@@ -91,8 +91,8 @@ describe("paperclip-plugin-linear", () => {
       linearApiKeyRef: "secret:linear-api-key",
       syncLabelName: "Paperclip",
       pollIntervalSeconds: 60,
-      assigneeMode: "issue_manager",
-      issueManagerAgentId: "agent-123",
+      assigneeMode: "fixed_agent",
+      defaultAssigneeAgentId: "agent-123",
       syncDirection: "bidirectional",
       commentSyncEnabled: true,
       prioritySyncEnabled: true,
@@ -113,16 +113,16 @@ describe("paperclip-plugin-linear", () => {
     expect((result.errors ?? []).length).toBeGreaterThan(0);
   });
 
-  it("onValidateConfig warns when issue_manager mode lacks issueManagerAgentId", async () => {
+  it("onValidateConfig warns when fixed_agent mode lacks defaultAssigneeAgentId", async () => {
     if (!plugin.definition.onValidateConfig) {
       throw new Error("onValidateConfig not defined");
     }
     const result = await plugin.definition.onValidateConfig({
       linearApiKeyRef: "secret:linear-api-key",
-      assigneeMode: "issue_manager",
+      assigneeMode: "fixed_agent",
     });
     expect(result.ok).toBe(true);
-    expect((result.warnings ?? []).some((w) => w.includes("issueManagerAgentId"))).toBe(true);
+    expect((result.warnings ?? []).some((w) => w.includes("defaultAssigneeAgentId"))).toBe(true);
   });
 
   it("onHealth returns ok", async () => {

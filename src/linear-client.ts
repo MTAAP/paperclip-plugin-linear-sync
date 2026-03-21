@@ -270,6 +270,24 @@ export class LinearClient {
   }
 
   /**
+   * List all active members in the workspace.
+   */
+  async fetchUsers(): Promise<LinearUser[]> {
+    const query = `
+      query FetchUsers {
+        users(first: 100) {
+          nodes {
+            id name email displayName avatarUrl active
+          }
+        }
+      }
+    `;
+
+    const data = await this.request<{ users: LinearConnection<LinearUser> }>(query);
+    return data.users.nodes;
+  }
+
+  /**
    * Fetch the authenticated user/app info (for health check).
    */
   async fetchViewer(): Promise<LinearUser> {

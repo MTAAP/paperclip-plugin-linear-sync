@@ -171,6 +171,21 @@ async function registerDataHandlers(ctx: PluginContext): Promise<void> {
     }
   });
 
+  // Settings — list Linear workspace members (for mapped assignment dropdowns)
+  ctx.data.register("linear-users", async () => {
+    const config = await getConfig(ctx);
+    if (!config.linearApiKeyRef) return { users: [], error: "No API key configured" };
+    try {
+      const apiKey = await ctx.secrets.resolve(config.linearApiKeyRef);
+      const client = new LinearClient(apiKey);
+      const users = await client.fetchUsers();
+      return { users };
+    } catch (err) {
+      ctx.logger.warn("linear-users: failed to fetch users", { error: String(err) });
+      return { users: [], error: String(err) };
+    }
+  });
+
   // Settings — list Paperclip agents (for assignee dropdowns)
   ctx.data.register("paperclip-agents", async (params) => {
     const companyId = typeof params.companyId === "string" ? params.companyId : null;
@@ -381,12 +396,12 @@ const plugin = definePlugin({
       }
     }
 
-    if (typed.assigneeMode === "issue_manager" && !typed.issueManagerAgentId) {
-      warnings.push("issueManagerAgentId is recommended when assigneeMode is 'issue_manager'");
-    }
-
     if (typed.assigneeMode === "fixed_agent" && !typed.defaultAssigneeAgentId) {
       warnings.push("defaultAssigneeAgentId is required when assigneeMode is 'fixed_agent'");
+    }
+
+    if (typed.assigneeMode === "mapped" && Object.keys(typed.linearUserAgentMapping ?? {}).length === 0) {
+      warnings.push("linearUserAgentMapping is empty — no Linear users will be mapped to agents unless mappedFallbackAgentId is set");
     }
 
     return { ok: true, errors: [], warnings };

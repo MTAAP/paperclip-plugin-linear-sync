@@ -80,8 +80,8 @@ const BASE_CONFIG = {
   linearApiKeyRef: "secret:linear-key",
   syncLabelName: "Paperclip",
   pollIntervalSeconds: 60,
-  assigneeMode: "issue_manager",
-  issueManagerAgentId: "agent-manager-1",
+  assigneeMode: "fixed_agent",
+  defaultAssigneeAgentId: "agent-default-1",
   syncDirection: "bidirectional",
   commentSyncEnabled: true,
   prioritySyncEnabled: true,
@@ -763,5 +763,116 @@ describe("onValidateConfig — project routing", () => {
       fallbackProjectId: "proj-fallback",
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveAssignee — mapped mode
+// ---------------------------------------------------------------------------
+
+describe("linear-poll: mapped assignee mode", () => {
+  it("assigns mapped agent when Linear issue has a known assignee", async () => {
+    const config = {
+      ...BASE_CONFIG,
+      assigneeMode: "mapped",
+      defaultAssigneeAgentId: undefined,
+      linearUserAgentMapping: { "linear-user-1": "agent-mapped-1" },
+    };
+    const harness = makeHarness(config);
+    await plugin.definition.setup(harness.ctx);
+
+    const issue = makeLinearIssue({
+      assignee: { id: "linear-user-1", name: "Alice", email: "alice@example.com", displayName: "Alice" },
+    });
+
+    let createdWithAssignee: string | undefined;
+    const origCreate = harness.ctx.issues.create.bind(harness.ctx.issues);
+    (harness.ctx.issues as unknown as Record<string, unknown>).create = async (params: Record<string, unknown>) => {
+      createdWithAssignee = params.assigneeAgentId as string | undefined;
+      return origCreate(params as Parameters<typeof origCreate>[0]);
+    };
+
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([issue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    expect(createdWithAssignee).toBe("agent-mapped-1");
+  });
+
+  it("falls back to mappedFallbackAgentId when Linear user has no mapping", async () => {
+    const config = {
+      ...BASE_CONFIG,
+      assigneeMode: "mapped",
+      defaultAssigneeAgentId: undefined,
+      linearUserAgentMapping: { "linear-user-other": "agent-other" },
+      mappedFallbackAgentId: "agent-fallback-1",
+    };
+    const harness = makeHarness(config);
+    await plugin.definition.setup(harness.ctx);
+
+    const issue = makeLinearIssue({
+      assignee: { id: "linear-user-1", name: "Alice", email: "alice@example.com", displayName: "Alice" },
+    });
+
+    let createdWithAssignee: string | undefined;
+    const origCreate = harness.ctx.issues.create.bind(harness.ctx.issues);
+    (harness.ctx.issues as unknown as Record<string, unknown>).create = async (params: Record<string, unknown>) => {
+      createdWithAssignee = params.assigneeAgentId as string | undefined;
+      return origCreate(params as Parameters<typeof origCreate>[0]);
+    };
+
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([issue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    expect(createdWithAssignee).toBe("agent-fallback-1");
+  });
+
+  it("assigns no agent when Linear issue is unassigned and no fallback set", async () => {
+    const config = {
+      ...BASE_CONFIG,
+      assigneeMode: "mapped",
+      defaultAssigneeAgentId: undefined,
+      linearUserAgentMapping: { "linear-user-1": "agent-mapped-1" },
+    };
+    const harness = makeHarness(config);
+    await plugin.definition.setup(harness.ctx);
+
+    const issue = makeLinearIssue({ assignee: null });
+
+    let createdWithAssignee: string | undefined = "SENTINEL";
+    const origCreate = harness.ctx.issues.create.bind(harness.ctx.issues);
+    (harness.ctx.issues as unknown as Record<string, unknown>).create = async (params: Record<string, unknown>) => {
+      createdWithAssignee = params.assigneeAgentId as string | undefined;
+      return origCreate(params as Parameters<typeof origCreate>[0]);
+    };
+
+    globalThis.fetch = mockLinearFetch([
+      issuesByLabelResponse([issue]),
+      commentsResponse([]),
+    ]) as unknown as typeof globalThis.fetch;
+
+    await harness.runJob("linear-poll");
+
+    expect(createdWithAssignee).toBeUndefined();
+  });
+
+  it("warns when mapped mode has empty linearUserAgentMapping", async () => {
+    if (!plugin.definition.onValidateConfig) throw new Error("onValidateConfig not defined");
+    const result = await plugin.definition.onValidateConfig({
+      linearApiKeyRef: "secret:key",
+      assigneeMode: "mapped",
+      linearUserAgentMapping: {},
+      projectRoutingMode: "single",
+      targetProjectId: "proj-001",
+    });
+    expect(result.ok).toBe(true);
+    expect((result.warnings ?? []).some((w) => w.includes("linearUserAgentMapping"))).toBe(true);
   });
 });

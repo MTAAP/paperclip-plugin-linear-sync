@@ -33,33 +33,23 @@ Issues tagged with a configurable label in Linear (default: `"Paperclip"`) are a
 
 ## Installation
 
-### 1. Add the package
+### 1. Clone and build
 
 ```bash
-npm install @paperclipai/plugin-linear-sync
-# or
-pnpm add @paperclipai/plugin-linear-sync
+git clone https://github.com/MTAAP/paperclip-plugin-linear-sync.git
+cd paperclip-plugin-linear-sync
+npm install && npm run build
 ```
 
-### 2. Build the plugin
+### 2. Install into Paperclip
 
 ```bash
-npm run build
+npx paperclipai plugin install --local .
 ```
 
-### 3. Register with Paperclip
+The CLI registers the plugin directly from the local directory — no npm publish or manual config wiring needed.
 
-In your Paperclip instance config, add the plugin manifest path:
-
-```json
-{
-  "plugins": [
-    "./node_modules/@paperclipai/plugin-linear-sync/dist/manifest.js"
-  ]
-}
-```
-
-### 4. Store your Linear API key as a secret
+### 3. Store your Linear API key as a secret
 
 The plugin reads the API key from a Paperclip company secret (never stored in plain config). In your Paperclip admin:
 
@@ -67,7 +57,7 @@ The plugin reads the API key from a Paperclip company secret (never stored in pl
 2. Create a new secret (e.g. `linear-api-key`) with your Linear personal API key
 3. Copy the secret reference ID — you will use this in the plugin config as `linearApiKeyRef`
 
-### 5. Enable and configure the plugin
+### 4. Enable and configure the plugin
 
 1. Go to **Settings > Plugins > Linear Sync**
 2. Enter your secret reference in **Linear API Key (Secret Reference)**

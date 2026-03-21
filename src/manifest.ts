@@ -112,7 +112,7 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "string",
         title: "Project Routing Mode",
         description: "How synced issues are routed to Paperclip projects.",
-        enum: ["single", "team_mapped"],
+        enum: ["single", "team_mapped", "project_mapped"],
         default: "single",
       },
       targetProjectId: {
@@ -131,7 +131,15 @@ const manifest: PaperclipPluginManifestV1 = {
       fallbackProjectId: {
         type: "string",
         title: "Fallback Project ID",
-        description: "Paperclip project to use when a Linear team has no entry in teamProjectMapping (used when projectRoutingMode is 'team_mapped').",
+        description: "Paperclip project to use when no mapping exists for the Linear team or project (used when projectRoutingMode is 'team_mapped' or 'project_mapped').",
+      },
+      linearProjectMapping: {
+        type: "object",
+        title: "Linear Project → Paperclip Project Mapping",
+        description: "Maps Linear project IDs to Paperclip project IDs (used when projectRoutingMode is 'project_mapped').",
+        additionalProperties: {
+          type: "string",
+        },
       },
     },
     required: ["linearApiKeyRef"],

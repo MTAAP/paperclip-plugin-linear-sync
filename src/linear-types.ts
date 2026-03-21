@@ -54,6 +54,14 @@ export interface LinearWorkflowState {
   team: Pick<LinearTeam, "id" | "name">;
 }
 
+export interface LinearProject {
+  id: string;
+  name: string;
+  key: string;
+  description: string | null;
+  color: string | null;
+}
+
 export interface LinearComment {
   id: string;
   body: string;
@@ -76,6 +84,7 @@ export interface LinearIssue {
   state: LinearWorkflowState;
   team: Pick<LinearTeam, "id" | "name" | "key">;
   assignee: Pick<LinearUser, "id" | "name" | "email" | "displayName"> | null;
+  project: Pick<LinearProject, "id" | "name"> | null;
   labels: LinearConnection<Pick<LinearLabel, "id" | "name" | "color">>;
   comments: LinearConnection<LinearComment>;
   url: string;

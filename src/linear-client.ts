@@ -6,6 +6,7 @@ import {
   type LinearComment,
   type LinearConnection,
   type LinearIssue,
+  type LinearProject,
   type LinearTeam,
   type LinearUser,
   type LinearWorkflowState,
@@ -52,6 +53,7 @@ const ISSUE_FIELDS = `
   url
   state { ${WORKFLOW_STATE_FIELDS} }
   team { id name key }
+  project { id name }
   assignee { id name email displayName }
   labels(first: 20) {
     nodes { id name color }
@@ -247,6 +249,24 @@ export class LinearClient {
 
     const data = await this.request<{ teams: LinearConnection<LinearTeam> }>(query);
     return data.teams.nodes;
+  }
+
+  /**
+   * List all projects in the workspace.
+   */
+  async fetchProjects(): Promise<LinearProject[]> {
+    const query = `
+      query FetchProjects {
+        projects(first: 100) {
+          nodes {
+            id name key description color
+          }
+        }
+      }
+    `;
+
+    const data = await this.request<{ projects: LinearConnection<LinearProject> }>(query);
+    return data.projects.nodes;
   }
 
   /**

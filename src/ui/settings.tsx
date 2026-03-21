@@ -28,11 +28,13 @@ const PAPERCLIP_STATUSES = [
 // ---------------------------------------------------------------------------
 
 type LinearTeam = { id: string; name: string; key: string };
+type LinearProject = { id: string; name: string; key: string };
 type LinearWorkflowState = { id: string; name: string; type: string };
 type PaperclipAgent = { id: string; name: string; title?: string | null; role?: string | null };
 type PaperclipProject = { id: string; name: string };
 
 type TeamsData = { teams: LinearTeam[]; error?: string };
+type LinearProjectsData = { projects: LinearProject[]; error?: string };
 type WorkflowStatesData = { states: LinearWorkflowState[]; error?: string };
 type AgentsData = { agents: PaperclipAgent[]; error?: string };
 type ProjectsData = { projects: PaperclipProject[]; error?: string };
@@ -50,10 +52,11 @@ type PluginConfig = {
   commentSyncEnabled?: boolean;
   prioritySyncEnabled?: boolean;
   linearTeamFilter?: string[];
-  projectRoutingMode?: "single" | "team_mapped";
+  projectRoutingMode?: "single" | "team_mapped" | "project_mapped";
   targetProjectId?: string;
   teamProjectMapping?: Record<string, string>;
   fallbackProjectId?: string;
+  linearProjectMapping?: Record<string, string>;
 };
 
 const DEFAULT_CONFIG: PluginConfig = {
@@ -65,6 +68,7 @@ const DEFAULT_CONFIG: PluginConfig = {
   prioritySyncEnabled: true,
   projectRoutingMode: "single",
   teamProjectMapping: {},
+  linearProjectMapping: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -491,6 +495,127 @@ function TeamProjectMappingEditor({
 }
 
 // ---------------------------------------------------------------------------
+// LinearProjectMappingEditor
+// ---------------------------------------------------------------------------
+
+type LinearProjectMappingEditorProps = {
+  linearProjects: LinearProject[];
+  linearProjectsLoading: boolean;
+  paperclipProjects: PaperclipProject[];
+  paperclipProjectsLoading: boolean;
+  mapping: Record<string, string>;
+  fallbackProjectId: string | undefined;
+  onChange: (mapping: Record<string, string>) => void;
+  onFallbackChange: (projectId: string | undefined) => void;
+};
+
+function LinearProjectMappingEditor({
+  linearProjects,
+  linearProjectsLoading,
+  paperclipProjects,
+  paperclipProjectsLoading,
+  mapping,
+  fallbackProjectId,
+  onChange,
+  onFallbackChange,
+}: LinearProjectMappingEditorProps) {
+  if (linearProjectsLoading) {
+    return <div style={helpTextStyle}>Loading Linear projects…</div>;
+  }
+
+  if (linearProjects.length === 0) {
+    return (
+      <div style={helpTextStyle}>
+        No Linear projects found. Configure your API key and test the connection first.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "12px" }}>
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            <th style={thStyle}>Linear Project</th>
+            <th style={thStyle}>Paperclip Project</th>
+            <th style={{ ...thStyle, width: 80 }}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {linearProjects.map((lp) => {
+            const mapped = mapping[lp.id];
+            return (
+              <tr key={lp.id}>
+                <td style={tdStyle}>
+                  <span style={{ fontWeight: 500 }}>{lp.name}</span>
+                  <span style={{ ...helpTextStyle, marginLeft: 6 }}>[{lp.key}]</span>
+                </td>
+                <td style={tdStyle}>
+                  {paperclipProjectsLoading ? (
+                    <span style={helpTextStyle}>Loading…</span>
+                  ) : (
+                    <select
+                      style={selectStyle}
+                      value={mapped ?? ""}
+                      onChange={(e) => {
+                        const next = { ...mapping };
+                        if (e.target.value) {
+                          next[lp.id] = e.target.value;
+                        } else {
+                          delete next[lp.id];
+                        }
+                        onChange(next);
+                      }}
+                    >
+                      <option value="">— not mapped —</option>
+                      {paperclipProjects.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </td>
+                <td style={tdStyle}>
+                  {mapped ? (
+                    <span style={{ color: "var(--success, #16a34a)", fontSize: 12 }}>✓ mapped</span>
+                  ) : (
+                    <span style={{ color: "var(--warning, #d97706)", fontSize: 12 }}>unmapped</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <label style={labelStyle}>
+        <span style={labelTextStyle}>Fallback project</span>
+        <span style={helpTextStyle}>
+          Issues from unmapped or unassigned Linear projects go here. If unset, unmapped issues are skipped.
+        </span>
+        {paperclipProjectsLoading ? (
+          <span style={helpTextStyle}>Loading…</span>
+        ) : (
+          <select
+            style={selectStyle}
+            value={fallbackProjectId ?? ""}
+            onChange={(e) => onFallbackChange(e.target.value || undefined)}
+          >
+            <option value="">— no fallback —</option>
+            {paperclipProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </label>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main settings page
 // ---------------------------------------------------------------------------
 
@@ -501,6 +626,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
 
   // Data fetching
   const teamsResult = usePluginData<TeamsData>("linear-teams");
+  const linearProjectsResult = usePluginData<LinearProjectsData>("linear-projects");
   const projectsResult = usePluginData<ProjectsData>("paperclip-projects", {
     companyId: companyId ?? undefined,
   });
@@ -598,6 +724,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   }
 
   const teams = teamsResult.data?.teams ?? [];
+  const linearProjects = linearProjectsResult.data?.projects ?? [];
   const projects = projectsResult.data?.projects ?? [];
   const agents = agentsResult.data?.agents ?? [];
   const workflowStates = statesResult.data?.states ?? [];
@@ -875,7 +1002,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
               type="radio"
               name="projectRoutingMode"
               value="single"
-              checked={config.projectRoutingMode !== "team_mapped"}
+              checked={config.projectRoutingMode === "single" || (!config.projectRoutingMode)}
               onChange={() => set("projectRoutingMode", "single")}
             />
             <span>
@@ -896,9 +1023,22 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
               <span style={{ ...helpTextStyle, marginLeft: 6 }}>Each team routes to a different project</span>
             </span>
           </label>
+          <label style={radioRowStyle}>
+            <input
+              type="radio"
+              name="projectRoutingMode"
+              value="project_mapped"
+              checked={config.projectRoutingMode === "project_mapped"}
+              onChange={() => set("projectRoutingMode", "project_mapped")}
+            />
+            <span>
+              Map by Linear project
+              <span style={{ ...helpTextStyle, marginLeft: 6 }}>Each Linear project routes to a Paperclip project</span>
+            </span>
+          </label>
         </div>
 
-        {config.projectRoutingMode !== "team_mapped" ? (
+        {config.projectRoutingMode === "single" || !config.projectRoutingMode ? (
           <label style={labelStyle}>
             <span style={labelTextStyle}>Target project</span>
             <span style={helpTextStyle}>All mirrored issues will be created in this project.</span>
@@ -924,7 +1064,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
               </span>
             )}
           </label>
-        ) : (
+        ) : config.projectRoutingMode === "team_mapped" ? (
           <TeamProjectMappingEditor
             teams={teams}
             teamsLoading={teamsResult.loading}
@@ -933,6 +1073,17 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
             mapping={config.teamProjectMapping ?? {}}
             fallbackProjectId={config.fallbackProjectId}
             onChange={(m) => set("teamProjectMapping", m)}
+            onFallbackChange={(v) => set("fallbackProjectId", v)}
+          />
+        ) : (
+          <LinearProjectMappingEditor
+            linearProjects={linearProjects}
+            linearProjectsLoading={linearProjectsResult.loading}
+            paperclipProjects={projects}
+            paperclipProjectsLoading={projectsResult.loading}
+            mapping={config.linearProjectMapping ?? {}}
+            fallbackProjectId={config.fallbackProjectId}
+            onChange={(m) => set("linearProjectMapping", m)}
             onFallbackChange={(v) => set("fallbackProjectId", v)}
           />
         )}

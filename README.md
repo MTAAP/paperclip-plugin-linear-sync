@@ -24,11 +24,14 @@ Issues tagged with a configurable label in Linear (default: "Paperclip") are aut
 - A Linear API key with read/write access
 - The plugin installed and enabled in **Settings > Plugins**
 
-## Build
+## Development
 
 ```bash
 npm install
-npm run build
+npm run build        # production build (esbuild)
+npm run dev          # watch mode
+npm run test         # run tests (vitest)
+npm run typecheck    # type-check without emitting
 ```
 
 ## Configuration

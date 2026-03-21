@@ -156,6 +156,21 @@ async function registerDataHandlers(ctx: PluginContext): Promise<void> {
     }
   });
 
+  // Settings — list Linear projects (for project routing dropdowns)
+  ctx.data.register("linear-projects", async () => {
+    const config = await getConfig(ctx);
+    if (!config.linearApiKeyRef) return { projects: [], error: "No API key configured" };
+    try {
+      const apiKey = await ctx.secrets.resolve(config.linearApiKeyRef);
+      const client = new LinearClient(apiKey);
+      const projects = await client.fetchProjects();
+      return { projects };
+    } catch (err) {
+      ctx.logger.warn("linear-projects: failed to fetch projects", { error: String(err) });
+      return { projects: [], error: String(err) };
+    }
+  });
+
   // Settings — list Paperclip agents (for assignee dropdowns)
   ctx.data.register("paperclip-agents", async (params) => {
     const companyId = typeof params.companyId === "string" ? params.companyId : null;
@@ -348,6 +363,18 @@ const plugin = definePlugin({
           ok: false,
           errors: [
             "When projectRoutingMode is 'team_mapped', at least one entry in teamProjectMapping or a fallbackProjectId is required",
+          ],
+          warnings,
+        };
+      }
+    } else if ("projectRoutingMode" in config && typed.projectRoutingMode === "project_mapped") {
+      const hasMapping = Object.keys(typed.linearProjectMapping ?? {}).length > 0;
+      const hasFallback = Boolean(typed.fallbackProjectId);
+      if (!hasMapping && !hasFallback) {
+        return {
+          ok: false,
+          errors: [
+            "When projectRoutingMode is 'project_mapped', at least one entry in linearProjectMapping or a fallbackProjectId is required",
           ],
           warnings,
         };

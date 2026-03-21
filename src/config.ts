@@ -6,7 +6,7 @@ import { z } from "@paperclipai/plugin-sdk";
 
 const AssigneeModeSchema = z.enum(["issue_manager", "fixed_agent", "mapped"]);
 const SyncDirectionSchema = z.enum(["bidirectional", "linear_to_paperclip", "paperclip_to_linear"]);
-const ProjectRoutingModeSchema = z.enum(["single", "team_mapped"]);
+const ProjectRoutingModeSchema = z.enum(["single", "team_mapped", "project_mapped"]);
 
 export const LinearSyncConfigSchema = z.object({
   linearApiKeyRef: z.string().min(1, "linearApiKeyRef is required"),
@@ -26,6 +26,9 @@ export const LinearSyncConfigSchema = z.object({
   targetProjectId: z.string().optional(),
   teamProjectMapping: z.record(z.string()).default({}),
   fallbackProjectId: z.string().optional(),
+
+  // Mode 3 project routing: Linear project → Paperclip project
+  linearProjectMapping: z.record(z.string()).default({}),
 });
 
 export type LinearSyncConfig = z.infer<typeof LinearSyncConfigSchema>;
@@ -39,6 +42,7 @@ export const DEFAULT_CONFIG: Partial<LinearSyncConfig> = {
   prioritySyncEnabled: true,
   projectRoutingMode: "single",
   teamProjectMapping: {},
+  linearProjectMapping: {},
 };
 
 export function parseConfig(raw: Record<string, unknown>): LinearSyncConfig | null {

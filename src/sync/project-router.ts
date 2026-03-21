@@ -20,7 +20,7 @@ export interface ProjectRouterContext {
  */
 export function resolveProjectId(
   linearIssue: LinearIssue,
-  config: Pick<LinearSyncConfig, "projectRoutingMode" | "targetProjectId" | "teamProjectMapping" | "fallbackProjectId">,
+  config: Pick<LinearSyncConfig, "projectRoutingMode" | "targetProjectId" | "teamProjectMapping" | "fallbackProjectId" | "linearProjectMapping">,
   ctx: ProjectRouterContext,
 ): string | null {
   const mode = config.projectRoutingMode ?? "single";
@@ -33,6 +33,29 @@ export function resolveProjectId(
       return null;
     }
     return config.targetProjectId;
+  }
+
+  if (mode === "project_mapped") {
+    const linearProjectId = linearIssue.project?.id;
+    const mapping = config.linearProjectMapping ?? {};
+
+    if (linearProjectId) {
+      const mappedProjectId = mapping[linearProjectId];
+      if (mappedProjectId) {
+        return mappedProjectId;
+      }
+    }
+
+    if (config.fallbackProjectId) {
+      return config.fallbackProjectId;
+    }
+
+    const projectName = linearIssue.project?.name ?? "none";
+    ctx.logWarning(
+      `linear-sync: no project mapping for Linear project '${projectName}' (${linearProjectId ?? "unset"}) and no fallbackProjectId configured — skipping import`,
+      { linearIssueId: linearIssue.id, linearProjectId, linearProjectName: projectName },
+    );
+    return null;
   }
 
   // team_mapped mode

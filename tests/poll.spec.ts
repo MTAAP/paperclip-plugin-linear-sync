@@ -46,6 +46,7 @@ function makeLinearIssue(overrides: Partial<LinearIssue> = {}): LinearIssue {
     url: "https://linear.app/test/issue/ENG-1",
     state: { id: "state-1", name: "In Progress", type: "started", color: "#ffd700", description: null, team: { id: "team-1", name: "Engineering" } },
     team: { id: "team-1", name: "Engineering", key: "ENG" },
+    project: null,
     assignee: null,
     labels: { nodes: [{ id: "label-1", name: "Paperclip", color: "#0000ff" }], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null } },
     comments: { nodes: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: "cursor-0" } },
@@ -157,14 +158,14 @@ describe("resolveProjectId", () => {
 
   it("single mode: returns targetProjectId", () => {
     const issue = makeLinearIssue();
-    const config = { projectRoutingMode: "single" as const, targetProjectId: "proj-123", teamProjectMapping: {} };
+    const config = { projectRoutingMode: "single" as const, targetProjectId: "proj-123", teamProjectMapping: {}, linearProjectMapping: {} };
     expect(resolveProjectId(issue, config, mockCtx)).toBe("proj-123");
     expect(mockCtx.logWarning).not.toHaveBeenCalled();
   });
 
   it("single mode: returns null and warns when targetProjectId missing", () => {
     const issue = makeLinearIssue();
-    const config = { projectRoutingMode: "single" as const, teamProjectMapping: {} };
+    const config = { projectRoutingMode: "single" as const, teamProjectMapping: {}, linearProjectMapping: {} };
     expect(resolveProjectId(issue, config, mockCtx)).toBeNull();
     expect(mockCtx.logWarning).toHaveBeenCalledOnce();
   });
@@ -174,6 +175,7 @@ describe("resolveProjectId", () => {
     const config = {
       projectRoutingMode: "team_mapped" as const,
       teamProjectMapping: { "team-eng": "proj-eng" },
+      linearProjectMapping: {},
     };
     expect(resolveProjectId(issue, config, mockCtx)).toBe("proj-eng");
   });
@@ -183,6 +185,7 @@ describe("resolveProjectId", () => {
     const config = {
       projectRoutingMode: "team_mapped" as const,
       teamProjectMapping: { "team-eng": "proj-eng" },
+      linearProjectMapping: {},
       fallbackProjectId: "proj-fallback",
     };
     expect(resolveProjectId(issue, config, mockCtx)).toBe("proj-fallback");
@@ -193,6 +196,50 @@ describe("resolveProjectId", () => {
     const config = {
       projectRoutingMode: "team_mapped" as const,
       teamProjectMapping: { "team-eng": "proj-eng" },
+      linearProjectMapping: {},
+    };
+    expect(resolveProjectId(issue, config, mockCtx)).toBeNull();
+    expect(mockCtx.logWarning).toHaveBeenCalledOnce();
+  });
+
+  it("project_mapped mode: returns mapped project for known Linear project", () => {
+    const issue = makeLinearIssue({ project: { id: "lp-1", name: "Frontend" } });
+    const config = {
+      projectRoutingMode: "project_mapped" as const,
+      teamProjectMapping: {},
+      linearProjectMapping: { "lp-1": "proj-frontend" },
+    };
+    expect(resolveProjectId(issue, config, mockCtx)).toBe("proj-frontend");
+  });
+
+  it("project_mapped mode: returns fallbackProjectId for unknown Linear project", () => {
+    const issue = makeLinearIssue({ project: { id: "lp-other", name: "Other" } });
+    const config = {
+      projectRoutingMode: "project_mapped" as const,
+      teamProjectMapping: {},
+      linearProjectMapping: { "lp-1": "proj-frontend" },
+      fallbackProjectId: "proj-fallback",
+    };
+    expect(resolveProjectId(issue, config, mockCtx)).toBe("proj-fallback");
+  });
+
+  it("project_mapped mode: returns fallbackProjectId when issue has no Linear project", () => {
+    const issue = makeLinearIssue({ project: null });
+    const config = {
+      projectRoutingMode: "project_mapped" as const,
+      teamProjectMapping: {},
+      linearProjectMapping: { "lp-1": "proj-frontend" },
+      fallbackProjectId: "proj-fallback",
+    };
+    expect(resolveProjectId(issue, config, mockCtx)).toBe("proj-fallback");
+  });
+
+  it("project_mapped mode: returns null and warns when no mapping and no fallback", () => {
+    const issue = makeLinearIssue({ project: { id: "lp-other", name: "Other" } });
+    const config = {
+      projectRoutingMode: "project_mapped" as const,
+      teamProjectMapping: {},
+      linearProjectMapping: { "lp-1": "proj-frontend" },
     };
     expect(resolveProjectId(issue, config, mockCtx)).toBeNull();
     expect(mockCtx.logWarning).toHaveBeenCalledOnce();

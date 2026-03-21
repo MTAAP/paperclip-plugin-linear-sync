@@ -672,9 +672,15 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
         connectionResult.refresh();
       }
     } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === "object" && err !== null && "message" in err
+            ? String((err as { message: unknown }).message)
+            : String(err);
       toast({
         title: "Connection failed",
-        body: err instanceof Error ? err.message : String(err),
+        body: message,
         tone: "error",
       });
     } finally {

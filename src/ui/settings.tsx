@@ -782,11 +782,29 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   }
 
   /**
-   * Create a Paperclip company secret and return its UUID.
-   * Used when the user pastes a raw API key instead of a secret reference.
+   * Store the API key as a Paperclip company secret and return its UUID.
+   * If a secret named "linear-api-key" already exists, rotate it instead
+   * of creating a duplicate.
    */
-  async function createSecretForApiKey(rawKey: string): Promise<string> {
+  async function storeApiKeySecret(rawKey: string): Promise<string> {
     if (!companyId) throw new Error("No company context available");
+
+    // Check if a secret with this name already exists
+    const existing = await hostFetchJson<Array<{ id: string; name: string }>>(
+      `/api/companies/${companyId}/secrets`,
+    );
+    const found = existing.find((s) => s.name === "linear-api-key");
+
+    if (found) {
+      // Rotate the existing secret with the new value
+      await hostFetchJson<{ id: string }>(`/api/secrets/${found.id}/rotate`, {
+        method: "POST",
+        body: JSON.stringify({ value: rawKey }),
+      });
+      return found.id;
+    }
+
+    // Create a new secret
     const created = await hostFetchJson<{ id: string }>(
       `/api/companies/${companyId}/secrets`,
       {
@@ -808,7 +826,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
 
       // If the user typed something into the input, create a secret for it
       if (apiKeyInput.trim()) {
-        const secretId = await createSecretForApiKey(apiKeyInput.trim());
+        const secretId = await storeApiKeySecret(apiKeyInput.trim());
         effectiveRef = secretId;
         setApiKeyInput("");
       }

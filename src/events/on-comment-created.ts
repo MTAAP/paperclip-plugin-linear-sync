@@ -92,7 +92,11 @@ export async function handleCommentCreated(
     return;
   }
 
-  // 6. Resolve API key and create client
+  // 6. Resolve company ID (single call, reused below for agent lookup and activity)
+  const companies = await ctx.companies.list({ limit: 1 });
+  const companyId = companies[0]?.id;
+
+  // 7. Resolve API key and create client
   let apiKey: string;
   try {
     apiKey = await ctx.secrets.resolve(config.linearApiKeyRef);
@@ -104,17 +108,14 @@ export async function handleCommentCreated(
   }
   const linearClient = new LinearClient(apiKey);
 
-  // 7. Format comment body with attribution
+  // 8. Format comment body with attribution
   let authorName = "Unknown";
   if (payload.authorAgentId) {
     try {
-      const companies = await ctx.companies.list({ limit: 1 });
-      const companyId = companies[0]?.id;
-      if (companyId) {
-        const agents = await ctx.agents.list({ companyId, limit: 100 });
-        const agent = agents.find((a: { id: string; name: string }) => a.id === payload.authorAgentId);
-        authorName = agent?.name ?? "Agent";
-      }
+      const agent = companyId
+        ? await ctx.agents.get(payload.authorAgentId, companyId)
+        : null;
+      authorName = agent?.name ?? "Agent";
     } catch {
       authorName = "Agent";
     }
@@ -124,7 +125,7 @@ export async function handleCommentCreated(
 
   const formattedBody = `> **${authorName}** commented via Paperclip:\n\n${body}`;
 
-  // 8. Post comment to Linear
+  // 9. Post comment to Linear
   try {
     const postedComment = await linearClient.createComment(linearIssueId, formattedBody);
 
@@ -134,13 +135,11 @@ export async function handleCommentCreated(
       authorName,
     });
 
-    // 9. Track the outbound Linear comment ID so the poll job skips it (dedup)
+    // 10. Track the outbound Linear comment ID so the poll job skips it (dedup)
     const stateTracker = new StateTracker(ctx);
     await stateTracker.addSyncedOutboundCommentId(issueId, postedComment.id);
 
-    // 10. Log to activity feed
-    const companies = await ctx.companies.list({ limit: 1 });
-    const companyId = companies[0]?.id;
+    // 11. Log to activity feed
     if (companyId) {
       await ctx.activity.log({
         companyId,

@@ -52,6 +52,9 @@ async function syncComments(
 ): Promise<number> {
   let synced = 0;
   const cursor = await stateTracker.getCommentCursor(paperclipIssueId);
+  // Load previously synced comment IDs for deduplication (safety net against
+  // cursor corruption or state loss re-posting already-synced comments).
+  const syncedIds = await stateTracker.getSyncedCommentIds(paperclipIssueId);
   let after = cursor ?? undefined;
   let hasNext = true;
 
@@ -88,10 +91,15 @@ async function syncComments(
         continue;
       }
 
+      // Skip comments already synced inbound (safety net against cursor corruption).
+      if (syncedIds.has(comment.id)) {
+        continue;
+      }
       const author = comment.user?.displayName ?? comment.user?.name ?? "Linear";
       const body = `**${author}** (via Linear):\n\n${comment.body}`;
       try {
         await ctx.issues.createComment(paperclipIssueId, body, companyId);
+        syncedIds.add(comment.id);
         synced++;
       } catch (err) {
         ctx.logger.warn("linear-poll: failed to create comment", {
@@ -108,6 +116,10 @@ async function syncComments(
 
     hasNext = page.pageInfo.hasNextPage;
     after = page.pageInfo.endCursor ?? undefined;
+  }
+
+  if (synced > 0) {
+    await stateTracker.setSyncedCommentIds(paperclipIssueId, syncedIds);
   }
 
   return synced;

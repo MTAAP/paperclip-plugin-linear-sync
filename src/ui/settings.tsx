@@ -774,20 +774,12 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
 
   const [testing, setTesting] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
-  const [showApiKeyRef, setShowApiKeyRef] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const hasUserClearedMapping = useRef(false);
 
   function set<K extends keyof PluginConfig>(key: K, value: PluginConfig[K]) {
     setConfig((c) => ({ ...c, [key]: value }));
   }
-
-  /** Detect whether a string looks like a raw Linear API key (not a UUID secret ref). */
-  function isRawApiKey(value: string): boolean {
-    return value.startsWith("lin_api_") || value.startsWith("lin_oauth_");
-  }
-
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   /**
    * Create a Paperclip company secret and return its UUID.
@@ -810,53 +802,27 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   }
 
   async function handleTestConnection() {
-    // Determine the effective key ref — either from config or the input field
-    let effectiveRef = config.linearApiKeyRef;
-
-    // If the user typed a raw API key into the input, create a secret first
-    if (apiKeyInput && isRawApiKey(apiKeyInput)) {
-      setTesting(true);
-      try {
-        const secretId = await createSecretForApiKey(apiKeyInput);
-        set("linearApiKeyRef", secretId);
-        effectiveRef = secretId;
-        setApiKeyInput("");
-        toast({ title: "API key stored as secret", tone: "success" });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        toast({ title: "Failed to store secret", body: msg, tone: "error" });
-        setTesting(false);
-        return;
-      }
-    } else if (apiKeyInput && !UUID_RE.test(apiKeyInput)) {
-      // Neither a raw key nor a UUID — treat as raw key attempt
-      setTesting(true);
-      try {
-        const secretId = await createSecretForApiKey(apiKeyInput);
-        set("linearApiKeyRef", secretId);
-        effectiveRef = secretId;
-        setApiKeyInput("");
-        toast({ title: "API key stored as secret", tone: "success" });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        toast({ title: "Failed to store secret", body: msg, tone: "error" });
-        setTesting(false);
-        return;
-      }
-    } else if (apiKeyInput && UUID_RE.test(apiKeyInput)) {
-      // User entered a UUID directly — use it as the secret ref
-      set("linearApiKeyRef", apiKeyInput);
-      effectiveRef = apiKeyInput;
-      setApiKeyInput("");
-    }
-
-    if (!effectiveRef) {
-      toast({ title: "No API key configured", tone: "warn" });
-      return;
-    }
-
     setTesting(true);
     try {
+      let effectiveRef = config.linearApiKeyRef;
+
+      // If the user typed something into the input, create a secret for it
+      if (apiKeyInput.trim()) {
+        const secretId = await createSecretForApiKey(apiKeyInput.trim());
+        effectiveRef = secretId;
+        setApiKeyInput("");
+      }
+
+      if (!effectiveRef) {
+        toast({ title: "No API key provided", tone: "warn" });
+        setTesting(false);
+        return;
+      }
+
+      // Save config so the server-side scope check can find the secret ref
+      const nextConfig = { ...config, linearApiKeyRef: effectiveRef };
+      await saveConfig(nextConfig);
+
       const result = (await testConnection({ apiKeyRef: effectiveRef })) as {
         success: boolean;
         userName?: string;
@@ -958,29 +924,14 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
               ? "API key is configured. Paste a new key below to replace it."
               : "Paste your Linear personal API key. It will be securely stored as a Paperclip secret."}
           </span>
-          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-            <input
-              style={{ ...inputStyle, flex: 1 }}
-              type={showApiKeyRef ? "text" : "password"}
-              value={apiKeyInput}
-              placeholder={config.linearApiKeyRef ? "••••••••••• (configured)" : "lin_api_…"}
-              onChange={(e) => setApiKeyInput(e.target.value)}
-              autoComplete="off"
-            />
-            <button
-              type="button"
-              style={{
-                ...secondaryButtonStyle,
-                flexShrink: 0,
-                padding: "6px 10px",
-                fontSize: "12px",
-              }}
-              onClick={() => setShowApiKeyRef((v) => !v)}
-              title={showApiKeyRef ? "Hide" : "Show"}
-            >
-              {showApiKeyRef ? "Hide" : "Show"}
-            </button>
-          </div>
+          <input
+            style={inputStyle}
+            type="password"
+            value={apiKeyInput}
+            placeholder={config.linearApiKeyRef ? "••••••••••• (configured)" : "lin_api_…"}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            autoComplete="off"
+          />
         </label>
 
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>

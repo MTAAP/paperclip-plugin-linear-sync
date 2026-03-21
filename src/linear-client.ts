@@ -269,7 +269,7 @@ export class LinearClient {
       query FetchProjects($first: Int, $after: String) {
         projects(first: $first, after: $after) {
           nodes {
-            id name key description color
+            id name description color
           }
           ${PAGE_INFO_FRAGMENT}
         }

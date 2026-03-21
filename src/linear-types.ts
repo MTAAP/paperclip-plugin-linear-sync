@@ -57,7 +57,6 @@ export interface LinearWorkflowState {
 export interface LinearProject {
   id: string;
   name: string;
-  key: string;
   description: string | null;
   color: string | null;
 }

@@ -28,7 +28,7 @@ const PAPERCLIP_STATUSES = [
 // ---------------------------------------------------------------------------
 
 type LinearTeam = { id: string; name: string; key: string };
-type LinearProject = { id: string; name: string; key: string };
+type LinearProject = { id: string; name: string };
 type LinearUser = { id: string; name: string; email: string; displayName: string; active: boolean };
 type LinearWorkflowState = { id: string; name: string; type: string };
 type PaperclipAgent = { id: string; name: string; title?: string | null; role?: string | null };
@@ -259,118 +259,80 @@ type StatusMappingEditorProps = {
   onChange: (mapping: Record<string, string>) => void;
 };
 
+function defaultMappingForType(type: string): string {
+  if (type === "backlog") return "backlog";
+  if (type === "unstarted") return "todo";
+  if (type === "started") return "in_progress";
+  if (type === "completed") return "done";
+  if (type === "cancelled") return "cancelled";
+  return "todo";
+}
+
 function StatusMappingEditor({ mapping, workflowStates, statesLoading, onChange }: StatusMappingEditorProps) {
-  function setRow(linearState: string, pcStatus: string) {
-    onChange({ ...mapping, [linearState]: pcStatus });
-  }
-
-  function removeRow(linearState: string) {
-    const next = { ...mapping };
-    delete next[linearState];
-    onChange(next);
-  }
-
-  function addRow() {
-    const firstUnmapped = workflowStates.find((s) => !(s.name in mapping));
-    const key = firstUnmapped?.name ?? `State ${Object.keys(mapping).length + 1}`;
-    if (!(key in mapping)) {
-      onChange({ ...mapping, [key]: "todo" });
+  function generateDefaults(): Record<string, string> {
+    const defaults: Record<string, string> = {};
+    for (const state of workflowStates) {
+      defaults[state.name] = defaultMappingForType(state.type);
     }
+    return defaults;
   }
 
-  const rows = Object.entries(mapping);
+  if (statesLoading) {
+    return <div style={helpTextStyle}>Loading workflow states...</div>;
+  }
+
+  if (workflowStates.length === 0) {
+    return (
+      <div style={{ ...helpTextStyle, fontStyle: "italic" }}>
+        Select a team above to load workflow states.
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "grid", gap: "8px" }}>
-      {rows.length > 0 ? (
-        <table style={tableStyle}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Linear Workflow State</th>
-              <th style={thStyle}>Paperclip Status</th>
-              <th style={{ ...thStyle, width: 32 }} />
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            <th style={thStyle}>Linear Workflow State</th>
+            <th style={{ ...thStyle, width: 100 }}>Type</th>
+            <th style={thStyle}>Paperclip Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {workflowStates.map((state) => (
+            <tr key={state.id}>
+              <td style={{ ...tdStyle, fontWeight: 500 }}>{state.name}</td>
+              <td style={{ ...tdStyle, color: "var(--muted-foreground, #6b7280)", fontSize: "12px" }}>
+                {state.type}
+              </td>
+              <td style={tdStyle}>
+                <select
+                  style={selectStyle}
+                  value={mapping[state.name] ?? ""}
+                  onChange={(e) => {
+                    onChange({ ...mapping, [state.name]: e.target.value });
+                  }}
+                >
+                  <option value="" disabled>— select —</option>
+                  {PAPERCLIP_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {rows.map(([linearState, pcStatus]) => (
-              <tr key={linearState}>
-                <td style={tdStyle}>
-                  {statesLoading ? (
-                    <input
-                      style={inputStyle}
-                      value={linearState}
-                      onChange={(e) => {
-                        const next = { ...mapping };
-                        delete next[linearState];
-                        next[e.target.value] = pcStatus;
-                        onChange(next);
-                      }}
-                    />
-                  ) : workflowStates.length > 0 ? (
-                    <select
-                      style={selectStyle}
-                      value={linearState}
-                      onChange={(e) => {
-                        const next = { ...mapping };
-                        delete next[linearState];
-                        next[e.target.value] = pcStatus;
-                        onChange(next);
-                      }}
-                    >
-                      {workflowStates.map((s) => (
-                        <option key={s.id} value={s.name}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      style={inputStyle}
-                      value={linearState}
-                      onChange={(e) => {
-                        const next = { ...mapping };
-                        delete next[linearState];
-                        next[e.target.value] = pcStatus;
-                        onChange(next);
-                      }}
-                    />
-                  )}
-                </td>
-                <td style={tdStyle}>
-                  <select
-                    style={selectStyle}
-                    value={pcStatus}
-                    onChange={(e) => setRow(linearState, e.target.value)}
-                  >
-                    {PAPERCLIP_STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td style={tdStyle}>
-                  <button
-                    type="button"
-                    style={dangerButtonStyle}
-                    onClick={() => removeRow(linearState)}
-                    title="Remove mapping"
-                  >
-                    ×
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <div style={{ ...helpTextStyle, fontStyle: "italic" }}>
-          No status mappings defined. Add rows below or select a team to auto-populate.
-        </div>
-      )}
+          ))}
+        </tbody>
+      </table>
       <div>
-        <button type="button" style={secondaryButtonStyle} onClick={addRow}>
-          + Add mapping
+        <button
+          type="button"
+          style={secondaryButtonStyle}
+          onClick={() => onChange(generateDefaults())}
+        >
+          Reset to defaults
         </button>
       </div>
     </div>
@@ -552,7 +514,6 @@ function LinearProjectMappingEditor({
               <tr key={lp.id}>
                 <td style={tdStyle}>
                   <span style={{ fontWeight: 500 }}>{lp.name}</span>
-                  <span style={{ ...helpTextStyle, marginLeft: 6 }}>[{lp.key}]</span>
                 </td>
                 <td style={tdStyle}>
                   {paperclipProjectsLoading ? (

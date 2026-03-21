@@ -330,9 +330,15 @@ async function registerActionHandlers(ctx: PluginContext): Promise<void> {
 // Plugin definition
 // ---------------------------------------------------------------------------
 
+/** One-hour threshold for comment sync error degradation. */
+const COMMENT_ERROR_DEGRADED_MS = 60 * 60 * 1000;
+
+let pluginCtx: PluginContext | null = null;
+
 const plugin = definePlugin({
   async setup(ctx: PluginContext) {
     ctx.logger.info("Linear Sync plugin setup starting");
+    pluginCtx = ctx;
 
     await registerEventHandlers(ctx);
     registerJobs(ctx);
@@ -343,6 +349,26 @@ const plugin = definePlugin({
   },
 
   async onHealth(): Promise<PluginHealthDiagnostics> {
+    if (pluginCtx) {
+      const errorAt = await pluginCtx.state.get({
+        scopeKind: "instance",
+        stateKey: "last-comment-sync-error-at",
+      });
+      if (typeof errorAt === "string") {
+        const ageMs = Date.now() - Date.parse(errorAt);
+        if (!Number.isNaN(ageMs) && ageMs < COMMENT_ERROR_DEGRADED_MS) {
+          const errorMsg = await pluginCtx.state.get({
+            scopeKind: "instance",
+            stateKey: "last-comment-sync-error",
+          });
+          return {
+            status: "degraded",
+            message: `Comment sync error occurred recently: ${typeof errorMsg === "string" ? errorMsg : "unknown"}`,
+          };
+        }
+      }
+    }
+
     return {
       status: "ok",
       message: "Linear Sync plugin ready",

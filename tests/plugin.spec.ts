@@ -132,4 +132,58 @@ describe("paperclip-plugin-linear", () => {
     const result = await plugin.definition.onHealth();
     expect(result.status).toBe("ok");
   });
+
+  it("onHealth returns degraded when a comment sync error occurred recently", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities, "events.emit"],
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    if (!plugin.definition.onHealth) {
+      throw new Error("onHealth not defined");
+    }
+
+    // Simulate a recent comment sync error (10 seconds ago)
+    const recentTimestamp = new Date(Date.now() - 10_000).toISOString();
+    await harness.ctx.state.set(
+      { scopeKind: "instance", stateKey: "last-comment-sync-error-at" },
+      recentTimestamp,
+    );
+    await harness.ctx.state.set(
+      { scopeKind: "instance", stateKey: "last-comment-sync-error" },
+      "Connection refused",
+    );
+
+    const result = await plugin.definition.onHealth();
+    expect(result.status).toBe("degraded");
+    expect(result.message).toContain("Comment sync error");
+    expect(result.message).toContain("Connection refused");
+  });
+
+  it("onHealth returns ok when comment sync error is older than 1 hour", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities, "events.emit"],
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    if (!plugin.definition.onHealth) {
+      throw new Error("onHealth not defined");
+    }
+
+    // Simulate an old comment sync error (2 hours ago)
+    const oldTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    await harness.ctx.state.set(
+      { scopeKind: "instance", stateKey: "last-comment-sync-error-at" },
+      oldTimestamp,
+    );
+    await harness.ctx.state.set(
+      { scopeKind: "instance", stateKey: "last-comment-sync-error" },
+      "Old error",
+    );
+
+    const result = await plugin.definition.onHealth();
+    expect(result.status).toBe("ok");
+  });
 });

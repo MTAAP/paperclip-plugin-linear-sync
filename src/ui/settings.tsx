@@ -837,9 +837,18 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
         return;
       }
 
-      // Save config so the server-side scope check can find the secret ref
-      const nextConfig = { ...config, linearApiKeyRef: effectiveRef };
-      await saveConfig(nextConfig);
+      // Save only the linearApiKeyRef into the server's existing config.
+      // We fetch the server config fresh to avoid overwriting fields with local
+      // defaults that may not match the current manifest schema.
+      const serverState = await hostFetchJson<{ configJson?: Record<string, unknown> | null }>(
+        `/api/plugins/${PLUGIN_ID}/config`,
+      );
+      const serverConfig = serverState?.configJson ?? {};
+      await hostFetchJson(`/api/plugins/${PLUGIN_ID}/config`, {
+        method: "POST",
+        body: JSON.stringify({ configJson: { ...serverConfig, linearApiKeyRef: effectiveRef } }),
+      });
+      set("linearApiKeyRef", effectiveRef);
 
       const result = (await testConnection({ apiKeyRef: effectiveRef })) as {
         success: boolean;

@@ -106,10 +106,18 @@ export async function handleCommentCreated(
 
   // 7. Format comment body with attribution
   let authorName = "Unknown";
+
+  // Fetch companyId once — reused for agent name resolution and activity logging
+  let companyId: string | undefined;
+  try {
+    const companies = await ctx.companies.list({ limit: 1 });
+    companyId = companies[0]?.id;
+  } catch {
+    // companyId remains undefined; non-fatal
+  }
+
   if (payload.authorAgentId) {
     try {
-      const companies = await ctx.companies.list({ limit: 1 });
-      const companyId = companies[0]?.id;
       if (companyId) {
         const agents = await ctx.agents.list({ companyId, limit: 100 });
         const agent = agents.find((a: { id: string; name: string }) => a.id === payload.authorAgentId);
@@ -144,8 +152,6 @@ export async function handleCommentCreated(
     );
 
     // 10. Log to activity feed
-    const companies = await ctx.companies.list({ limit: 1 });
-    const companyId = companies[0]?.id;
     if (companyId) {
       await ctx.activity.log({
         companyId,

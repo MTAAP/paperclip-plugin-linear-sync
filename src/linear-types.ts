@@ -57,7 +57,6 @@ export interface LinearWorkflowState {
 export interface LinearProject {
   id: string;
   name: string;
-  key: string;
   description: string | null;
   color: string | null;
 }
@@ -113,11 +112,9 @@ export class LinearRateLimitError extends Error {
 }
 
 export class LinearNetworkError extends Error {
-  readonly cause: unknown;
   constructor(message: string, cause?: unknown) {
-    super(message);
+    super(message, { cause });
     this.name = "LinearNetworkError";
-    this.cause = cause;
   }
 }
 

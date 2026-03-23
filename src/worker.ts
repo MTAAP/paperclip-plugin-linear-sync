@@ -67,8 +67,8 @@ async function registerDataHandlers(ctx: PluginContext): Promise<void> {
     const apiKeyValid = await ctx.state.get({ scopeKind: "instance", stateKey: "api-key-valid" });
     const lastPoll = await ctx.state.get({ scopeKind: "instance", stateKey: "last-poll-at" });
     return {
-      status: apiKeyValid === false ? "error" : "ok",
-      apiKeyValid: apiKeyValid !== false,
+      status: apiKeyValid === true ? "ok" : apiKeyValid === false ? "error" : "unknown",
+      apiKeyValid: apiKeyValid === true,
       lastPollAt: lastPoll ?? null,
       checkedAt: new Date().toISOString(),
     };
@@ -171,6 +171,21 @@ async function registerDataHandlers(ctx: PluginContext): Promise<void> {
     }
   });
 
+  // Settings — list Linear workspace members (for mapped assignment dropdowns)
+  ctx.data.register("linear-users", async () => {
+    const config = await getConfig(ctx);
+    if (!config.linearApiKeyRef) return { users: [], error: "No API key configured" };
+    try {
+      const apiKey = await ctx.secrets.resolve(config.linearApiKeyRef);
+      const client = new LinearClient(apiKey);
+      const users = await client.fetchUsers();
+      return { users };
+    } catch (err) {
+      ctx.logger.warn("linear-users: failed to fetch users", { error: String(err) });
+      return { users: [], error: String(err) };
+    }
+  });
+
   // Settings — list Paperclip agents (for assignee dropdowns)
   ctx.data.register("paperclip-agents", async (params) => {
     const companyId = typeof params.companyId === "string" ? params.companyId : null;
@@ -226,11 +241,22 @@ async function registerDataHandlers(ctx: PluginContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function registerActionHandlers(ctx: PluginContext): Promise<void> {
-  // Settings — test the Linear API key connection
+  // Settings — test the Linear API key connection.
+  // Accepts either a resolved secret ref (`apiKeyRef`) or a raw key
+  // (`rawApiKey`) so the UI can test before saving config.
   ctx.actions.register("test-connection", async (params) => {
     const apiKeyRef = typeof params.apiKeyRef === "string" ? params.apiKeyRef : null;
-    if (!apiKeyRef) throw new Error("apiKeyRef is required");
-    const apiKey = await ctx.secrets.resolve(apiKeyRef);
+    const rawApiKey = typeof params.rawApiKey === "string" ? params.rawApiKey : null;
+
+    let apiKey: string;
+    if (rawApiKey) {
+      apiKey = rawApiKey;
+    } else if (apiKeyRef) {
+      apiKey = await ctx.secrets.resolve(apiKeyRef);
+    } else {
+      throw new Error("apiKeyRef or rawApiKey is required");
+    }
+
     const client = new LinearClient(apiKey);
     const viewer = await client.fetchViewer();
     await ctx.state.set({ scopeKind: "instance", stateKey: "api-key-valid" }, true);
@@ -304,9 +330,15 @@ async function registerActionHandlers(ctx: PluginContext): Promise<void> {
 // Plugin definition
 // ---------------------------------------------------------------------------
 
+/** One-hour threshold for comment sync error degradation. */
+const COMMENT_ERROR_DEGRADED_MS = 60 * 60 * 1000;
+
+let pluginCtx: PluginContext | null = null;
+
 const plugin = definePlugin({
   async setup(ctx: PluginContext) {
     ctx.logger.info("Linear Sync plugin setup starting");
+    pluginCtx = ctx;
 
     await registerEventHandlers(ctx);
     registerJobs(ctx);
@@ -317,6 +349,26 @@ const plugin = definePlugin({
   },
 
   async onHealth(): Promise<PluginHealthDiagnostics> {
+    if (pluginCtx) {
+      const errorAt = await pluginCtx.state.get({
+        scopeKind: "instance",
+        stateKey: "last-comment-sync-error-at",
+      });
+      if (typeof errorAt === "string") {
+        const ageMs = Date.now() - Date.parse(errorAt);
+        if (!Number.isNaN(ageMs) && ageMs < COMMENT_ERROR_DEGRADED_MS) {
+          const errorMsg = await pluginCtx.state.get({
+            scopeKind: "instance",
+            stateKey: "last-comment-sync-error",
+          });
+          return {
+            status: "degraded",
+            message: `Comment sync error occurred recently: ${typeof errorMsg === "string" ? errorMsg : "unknown"}`,
+          };
+        }
+      }
+    }
+
     return {
       status: "ok",
       message: "Linear Sync plugin ready",
@@ -337,14 +389,6 @@ const plugin = definePlugin({
 
     const warnings: string[] = [];
     const typed = result.data;
-
-    if (typed.pollIntervalSeconds < 30) {
-      return {
-        ok: false,
-        errors: ["pollIntervalSeconds must be at least 30"],
-        warnings,
-      };
-    }
 
     // Validate project routing config — only when explicitly provided
     if ("projectRoutingMode" in config && typed.projectRoutingMode === "single") {
@@ -381,12 +425,12 @@ const plugin = definePlugin({
       }
     }
 
-    if (typed.assigneeMode === "issue_manager" && !typed.issueManagerAgentId) {
-      warnings.push("issueManagerAgentId is recommended when assigneeMode is 'issue_manager'");
-    }
-
     if (typed.assigneeMode === "fixed_agent" && !typed.defaultAssigneeAgentId) {
       warnings.push("defaultAssigneeAgentId is required when assigneeMode is 'fixed_agent'");
+    }
+
+    if (typed.assigneeMode === "mapped" && Object.keys(typed.linearUserAgentMapping ?? {}).length === 0) {
+      warnings.push("linearUserAgentMapping is empty — no Linear users will be mapped to agents unless mappedFallbackAgentId is set");
     }
 
     return { ok: true, errors: [], warnings };

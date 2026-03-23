@@ -43,19 +43,31 @@ export async function handleCommentCreated(
   event: CommentCreatedEvent,
 ): Promise<void> {
   const issueId = event.entityId;
-  if (!issueId) return;
+  if (!issueId) {
+    ctx.logger.debug("handleCommentCreated: no entityId, skipping");
+    return;
+  }
+
+  ctx.logger.debug("handleCommentCreated: entry", { issueId });
 
   // 1. Resolve and validate config
   const raw = await ctx.config.get();
   const config = parseConfig(raw);
 
-  if (!config || !config.linearApiKeyRef) return;
+  if (!config || !config.linearApiKeyRef) {
+    ctx.logger.debug("handleCommentCreated: config missing or no API key, skipping", { issueId });
+    return;
+  }
 
   // 2. Check if comment sync is enabled
-  if (!config.commentSyncEnabled) return;
+  if (!config.commentSyncEnabled) {
+    ctx.logger.debug("handleCommentCreated: comment sync disabled, skipping", { issueId });
+    return;
+  }
 
   // 3. Check sync direction — skip if outbound is disabled
   if (config.syncDirection === "linear_to_paperclip") {
+    ctx.logger.debug("handleCommentCreated: sync direction is linear_to_paperclip, skipping outbound", { issueId });
     return;
   }
 
@@ -63,6 +75,7 @@ export async function handleCommentCreated(
   const body = payload.body;
 
   if (!body || typeof body !== "string" || body.trim().length === 0) {
+    ctx.logger.debug("handleCommentCreated: empty body, skipping", { issueId });
     return;
   }
 
@@ -88,7 +101,7 @@ export async function handleCommentCreated(
   const linearIssueId = await entityMapper.findByPaperclipIdStrict(issueId, ctx.logger);
 
   if (!linearIssueId) {
-    // Not a linked issue (or mapping is inconsistent) — silently skip
+    ctx.logger.debug("handleCommentCreated: issue not linked or mapping inconsistent, skipping", { issueId });
     return;
   }
 
@@ -153,6 +166,16 @@ export async function handleCommentCreated(
       });
     }
   } catch (err) {
+    // Track comment sync error for health endpoint degradation
+    await ctx.state.set(
+      { scopeKind: "instance", stateKey: "last-comment-sync-error-at" },
+      new Date().toISOString(),
+    );
+    await ctx.state.set(
+      { scopeKind: "instance", stateKey: "last-comment-sync-error" },
+      String(err),
+    );
+
     if (err instanceof LinearRateLimitError) {
       ctx.logger.warn("issue.comment.created: rate limited, comment not posted", {
         issueId,

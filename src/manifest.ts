@@ -5,7 +5,7 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.1.0",
   displayName: "Linear Sync",
-  description: "Bidirectionally syncs issues between Linear and Paperclip. Issues tagged with a configurable Linear label are mirrored into Paperclip and auto-assigned to an Issue Manager agent.",
+  description: "Bidirectionally syncs issues between Linear and Paperclip. Issues tagged with a configurable Linear label are mirrored into Paperclip and auto-assigned based on the configured assignee mode.",
   author: "MTAAP",
   categories: ["connector"],
   capabilities: [
@@ -25,6 +25,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "plugin.state.read",
     "plugin.state.write",
     "activity.log.write",
+    "agents.invoke",
     "agent.tools.register",
     "instance.settings.register",
     "ui.page.register",
@@ -40,8 +41,9 @@ const manifest: PaperclipPluginManifestV1 = {
     properties: {
       linearApiKeyRef: {
         type: "string",
-        title: "Linear API Key (Secret Reference)",
-        description: "Reference to a Paperclip company secret containing the Linear API key.",
+        format: "secret-ref",
+        title: "Linear API Key",
+        description: "Paperclip company secret containing the Linear API key.",
       },
       syncLabelName: {
         type: "string",
@@ -60,18 +62,26 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "string",
         title: "Assignee Mode",
         description: "How to handle assignment of mirrored issues.",
-        enum: ["issue_manager", "fixed_agent", "mapped"],
-        default: "issue_manager",
-      },
-      issueManagerAgentId: {
-        type: "string",
-        title: "Issue Manager Agent ID",
-        description: "Agent that triages incoming synced issues (used when assigneeMode is 'issue_manager').",
+        enum: ["fixed_agent", "mapped"],
+        default: "fixed_agent",
       },
       defaultAssigneeAgentId: {
         type: "string",
         title: "Default Assignee Agent ID",
         description: "Agent to auto-assign issues to (used when assigneeMode is 'fixed_agent').",
+      },
+      linearUserAgentMapping: {
+        type: "object",
+        title: "Linear User → Agent Mapping",
+        description: "Maps Linear user IDs to Paperclip agent IDs (used when assigneeMode is 'mapped').",
+        additionalProperties: {
+          type: "string",
+        },
+      },
+      mappedFallbackAgentId: {
+        type: "string",
+        title: "Mapped Fallback Agent ID",
+        description: "Agent to assign issues to when no mapping exists for the Linear issue assignee (used when assigneeMode is 'mapped').",
       },
       statusMapping: {
         type: "object",
@@ -98,6 +108,12 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "boolean",
         title: "Enable Priority Sync",
         description: "Sync issue priority between Linear and Paperclip.",
+        default: true,
+      },
+      agentAutoInvokeEnabled: {
+        type: "boolean",
+        title: "Auto-Invoke Agents",
+        description: "Automatically invoke the assigned agent when a new issue is synced or an issue's status changes to an active state (in_progress, in_review).",
         default: true,
       },
       linearTeamFilter: {

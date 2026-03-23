@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   usePluginAction,
   usePluginData,
@@ -45,13 +46,29 @@ type IssueSyncStatus = {
 // ---------------------------------------------------------------------------
 
 export function LinearSyncDashboardWidget(_props: PluginWidgetProps) {
-  const { data, loading, error } = usePluginData<HealthData>("health");
+  const { data, loading, error, refresh } = usePluginData<HealthData>("health");
   const syncNow = usePluginAction("sync-now");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   if (loading) return <div>Loading Linear Sync...</div>;
   if (error) return <div>Linear Sync error: {error.message}</div>;
 
   const statusColor = data?.status === "ok" ? "green" : "red";
+
+  async function handleSyncNow() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      await syncNow();
+      setSyncMsg("Sync complete");
+      refresh();
+    } catch (err) {
+      setSyncMsg(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   return (
     <div style={{ display: "grid", gap: "0.5rem", padding: "0.75rem" }}>
@@ -64,7 +81,10 @@ export function LinearSyncDashboardWidget(_props: PluginWidgetProps) {
       </div>
       <div>API Key: {data?.apiKeyValid ? "valid" : "not configured"}</div>
       <div>Last poll: {data?.lastPollAt ? new Date(data.lastPollAt).toLocaleString() : "never"}</div>
-      <button onClick={() => void syncNow()}>Sync Now</button>
+      <button onClick={handleSyncNow} disabled={syncing}>
+        {syncing ? "Syncing..." : "Sync Now"}
+      </button>
+      {syncMsg && <div style={{ fontSize: "12px", color: syncMsg.startsWith("Sync failed") ? "red" : "green" }}>{syncMsg}</div>}
     </div>
   );
 }

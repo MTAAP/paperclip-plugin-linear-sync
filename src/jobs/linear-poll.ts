@@ -23,9 +23,10 @@ function buildDescription(issue: LinearIssue): string {
   return parts.join("\n\n");
 }
 
-function resolveAssignee(config: LinearSyncConfig): string | undefined {
-  if (config.assigneeMode === "issue_manager" && config.issueManagerAgentId) {
-    return config.issueManagerAgentId;
+function resolveAssignee(config: LinearSyncConfig, issue: LinearIssue): string | undefined {
+  if (config.assigneeMode === "mapped") {
+    const mappedAgentId = issue.assignee?.id ? config.linearUserAgentMapping[issue.assignee.id] : undefined;
+    return mappedAgentId ?? config.mappedFallbackAgentId;
   }
   if (config.assigneeMode === "fixed_agent" && config.defaultAssigneeAgentId) {
     return config.defaultAssigneeAgentId;
@@ -36,6 +37,74 @@ function resolveAssignee(config: LinearSyncConfig): string | undefined {
 function shouldSkipTeam(issue: LinearIssue, config: LinearSyncConfig): boolean {
   if (!config.linearTeamFilter || config.linearTeamFilter.length === 0) return false;
   return !config.linearTeamFilter.includes(issue.team.key) && !config.linearTeamFilter.includes(issue.team.id);
+}
+
+/** Statuses that should trigger an agent invocation on transition. */
+const INVOKABLE_STATUSES = new Set(["in_progress", "in_review"]);
+
+/**
+ * Conditionally invoke the assigned agent after a sync operation.
+ *
+ * Guard conditions:
+ * 1. agentAutoInvokeEnabled must be true
+ * 2. An agentId must be resolved
+ * 3. Must NOT be a full scan (initial import)
+ *
+ * Failures are logged and swallowed — they must never break the sync.
+ */
+async function maybeInvokeAgent(
+  ctx: PluginContext,
+  opts: {
+    agentId: string | undefined;
+    companyId: string;
+    paperclipIssueId: string;
+    linearIssueIdentifier: string;
+    linearIssueTitle: string;
+    isFullScan: boolean;
+    config: LinearSyncConfig;
+    reason: string;
+  },
+): Promise<void> {
+  if (!opts.config.agentAutoInvokeEnabled) {
+    ctx.logger.debug("maybeInvokeAgent: skipping, agentAutoInvokeEnabled is false");
+    return;
+  }
+
+  if (!opts.agentId) {
+    ctx.logger.debug("maybeInvokeAgent: skipping, no assignee agent", {
+      paperclipIssueId: opts.paperclipIssueId,
+    });
+    return;
+  }
+
+  if (opts.isFullScan) {
+    ctx.logger.debug("maybeInvokeAgent: skipping during full scan", {
+      paperclipIssueId: opts.paperclipIssueId,
+      agentId: opts.agentId,
+    });
+    return;
+  }
+
+  const prompt = `[${opts.linearIssueIdentifier}] ${opts.linearIssueTitle}`;
+
+  try {
+    const { runId } = await ctx.agents.invoke(opts.agentId, opts.companyId, {
+      prompt,
+      reason: opts.reason,
+    });
+    ctx.logger.info("maybeInvokeAgent: invoked agent", {
+      agentId: opts.agentId,
+      paperclipIssueId: opts.paperclipIssueId,
+      runId,
+      reason: opts.reason,
+    });
+  } catch (err) {
+    ctx.logger.warn("maybeInvokeAgent: failed to invoke agent", {
+      agentId: opts.agentId,
+      paperclipIssueId: opts.paperclipIssueId,
+      error: String(err),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +306,7 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
 
         const pcStatus = statusLinearToPaperclip(issue.state.name, config) ?? "todo";
         const pcPriority = config.prioritySyncEnabled ? priorityLinearToPaperclip(issue.priority) : null;
-        const assigneeAgentId = resolveAssignee(config);
+        const assigneeAgentId = resolveAssignee(config, issue);
 
         const newIssue = await ctx.issues.create({
           companyId,
@@ -253,14 +322,28 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
           await ctx.issues.update(newIssue.id, { status: pcStatus as Issue["status"] }, companyId);
         }
 
+        // Record echo guard *before* link so any event triggered by the
+        // status update above is suppressed.
+        await echoGuard.recordWrite(newIssue.id, "linear");
+
         await entityMapper.linkIssue(issue.id, newIssue.id, {
           linearTitle: issue.title,
           linearUrl: issue.url,
           linearTeamId: issue.team.id,
         });
 
-        await echoGuard.recordWrite(newIssue.id, "linear");
         newCount++;
+
+        await maybeInvokeAgent(ctx, {
+          agentId: assigneeAgentId,
+          companyId,
+          paperclipIssueId: newIssue.id,
+          linearIssueIdentifier: issue.identifier,
+          linearIssueTitle: issue.title,
+          isFullScan,
+          config,
+          reason: "New issue synced from Linear",
+        });
 
         ctx.logger.debug("linear-poll: created Paperclip issue", {
           linearIssueId: issue.id,
@@ -276,6 +359,10 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
           });
           continue;
         }
+
+        // Read current status before updating (for invoke change detection)
+        const existingIssue = await ctx.issues.get(existingPaperclipId, companyId);
+        const previousStatus = existingIssue?.status;
 
         const patch: Partial<Pick<Issue, "title" | "description" | "status" | "priority" | "assigneeAgentId">> = {
           title: issue.title,
@@ -302,6 +389,21 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
         await ctx.issues.update(existingPaperclipId, patch, companyId);
         await echoGuard.recordWrite(existingPaperclipId, "linear");
         updatedCount++;
+
+        // Invoke agent when status transitions to an active state
+        if (pcStatus && pcStatus !== previousStatus && INVOKABLE_STATUSES.has(pcStatus)) {
+          const assigneeAgentId = resolveAssignee(config, issue);
+          await maybeInvokeAgent(ctx, {
+            agentId: assigneeAgentId,
+            companyId,
+            paperclipIssueId: existingPaperclipId,
+            linearIssueIdentifier: issue.identifier,
+            linearIssueTitle: issue.title,
+            isFullScan,
+            config,
+            reason: `Status changed to ${pcStatus}`,
+          });
+        }
       }
     }
 
@@ -309,11 +411,13 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
     paginationCursor = page.pageInfo.endCursor ?? undefined;
   }
 
-  // 7. Sync comments for all linked issues
+  // 7. Sync comments only for issues seen in this poll cycle (avoids O(N) API
+  //    calls across all linked issues every cycle).
   let commentSyncCount = 0;
-  if (config.commentSyncEnabled) {
+  if (config.commentSyncEnabled && seenLinearIds.size > 0) {
     const linkedIssues = await entityMapper.listLinkedIssues({ limit: 200 });
     for (const linked of linkedIssues) {
+      if (!seenLinearIds.has(linked.linearIssueId)) continue;
       try {
         const count = await syncComments(
           ctx,

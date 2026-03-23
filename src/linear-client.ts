@@ -238,17 +238,27 @@ export class LinearClient {
    */
   async fetchTeams(): Promise<LinearTeam[]> {
     const query = `
-      query FetchTeams {
-        teams(first: 100) {
+      query FetchTeams($first: Int, $after: String) {
+        teams(first: $first, after: $after) {
           nodes {
             id name key description color
           }
+          ${PAGE_INFO_FRAGMENT}
         }
       }
     `;
 
-    const data = await this.request<{ teams: LinearConnection<LinearTeam> }>(query);
-    return data.teams.nodes;
+    const all: LinearTeam[] = [];
+    let after: string | null = null;
+    let hasNext = true;
+    while (hasNext) {
+      const data: { teams: LinearConnection<LinearTeam> } =
+        await this.request(query, { first: 100, after });
+      all.push(...data.teams.nodes);
+      hasNext = data.teams.pageInfo.hasNextPage;
+      after = data.teams.pageInfo.endCursor;
+    }
+    return all;
   }
 
   /**
@@ -256,17 +266,45 @@ export class LinearClient {
    */
   async fetchProjects(): Promise<LinearProject[]> {
     const query = `
-      query FetchProjects {
-        projects(first: 100) {
+      query FetchProjects($first: Int, $after: String) {
+        projects(first: $first, after: $after) {
           nodes {
-            id name key description color
+            id name description color
+          }
+          ${PAGE_INFO_FRAGMENT}
+        }
+      }
+    `;
+
+    const all: LinearProject[] = [];
+    let after: string | null = null;
+    let hasNext = true;
+    while (hasNext) {
+      const data: { projects: LinearConnection<LinearProject> } =
+        await this.request(query, { first: 100, after });
+      all.push(...data.projects.nodes);
+      hasNext = data.projects.pageInfo.hasNextPage;
+      after = data.projects.pageInfo.endCursor;
+    }
+    return all;
+  }
+
+  /**
+   * List all active members in the workspace.
+   */
+  async fetchUsers(): Promise<LinearUser[]> {
+    const query = `
+      query FetchUsers {
+        users(first: 100) {
+          nodes {
+            id name email displayName avatarUrl active
           }
         }
       }
     `;
 
-    const data = await this.request<{ projects: LinearConnection<LinearProject> }>(query);
-    return data.projects.nodes;
+    const data = await this.request<{ users: LinearConnection<LinearUser> }>(query);
+    return data.users.nodes;
   }
 
   /**

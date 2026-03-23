@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   useHostContext,
   usePluginAction,
@@ -28,7 +28,8 @@ const PAPERCLIP_STATUSES = [
 // ---------------------------------------------------------------------------
 
 type LinearTeam = { id: string; name: string; key: string };
-type LinearProject = { id: string; name: string; key: string };
+type LinearProject = { id: string; name: string };
+type LinearUser = { id: string; name: string; email: string; displayName: string; active: boolean };
 type LinearWorkflowState = { id: string; name: string; type: string };
 type PaperclipAgent = { id: string; name: string; title?: string | null; role?: string | null };
 type PaperclipProject = { id: string; name: string };
@@ -38,19 +39,22 @@ type LinearProjectsData = { projects: LinearProject[]; error?: string };
 type WorkflowStatesData = { states: LinearWorkflowState[]; error?: string };
 type AgentsData = { agents: PaperclipAgent[]; error?: string };
 type ProjectsData = { projects: PaperclipProject[]; error?: string };
+type LinearUsersData = { users: LinearUser[]; error?: string };
 type ConnectionStatusData = { apiKeyValid: boolean; configured: boolean; checkedAt: string | null };
 
 type PluginConfig = {
   linearApiKeyRef?: string;
   syncLabelName?: string;
   pollIntervalSeconds?: number;
-  assigneeMode?: "issue_manager" | "fixed_agent" | "mapped";
-  issueManagerAgentId?: string;
+  assigneeMode?: "fixed_agent" | "mapped";
   defaultAssigneeAgentId?: string;
+  linearUserAgentMapping?: Record<string, string>;
+  mappedFallbackAgentId?: string;
   statusMapping?: Record<string, string>;
   syncDirection?: "bidirectional" | "linear_to_paperclip" | "paperclip_to_linear";
   commentSyncEnabled?: boolean;
   prioritySyncEnabled?: boolean;
+  agentAutoInvokeEnabled?: boolean;
   linearTeamFilter?: string[];
   projectRoutingMode?: "single" | "team_mapped" | "project_mapped";
   targetProjectId?: string;
@@ -62,10 +66,12 @@ type PluginConfig = {
 const DEFAULT_CONFIG: PluginConfig = {
   syncLabelName: "Paperclip",
   pollIntervalSeconds: 60,
-  assigneeMode: "issue_manager",
+  assigneeMode: "fixed_agent",
+  linearUserAgentMapping: {},
   syncDirection: "bidirectional",
   commentSyncEnabled: true,
   prioritySyncEnabled: true,
+  agentAutoInvokeEnabled: true,
   projectRoutingMode: "single",
   teamProjectMapping: {},
   linearProjectMapping: {},
@@ -255,118 +261,80 @@ type StatusMappingEditorProps = {
   onChange: (mapping: Record<string, string>) => void;
 };
 
+function defaultMappingForType(type: string): string {
+  if (type === "backlog") return "backlog";
+  if (type === "unstarted") return "todo";
+  if (type === "started") return "in_progress";
+  if (type === "completed") return "done";
+  if (type === "cancelled") return "cancelled";
+  return "todo";
+}
+
 function StatusMappingEditor({ mapping, workflowStates, statesLoading, onChange }: StatusMappingEditorProps) {
-  function setRow(linearState: string, pcStatus: string) {
-    onChange({ ...mapping, [linearState]: pcStatus });
-  }
-
-  function removeRow(linearState: string) {
-    const next = { ...mapping };
-    delete next[linearState];
-    onChange(next);
-  }
-
-  function addRow() {
-    const firstUnmapped = workflowStates.find((s) => !(s.name in mapping));
-    const key = firstUnmapped?.name ?? `State ${Object.keys(mapping).length + 1}`;
-    if (!(key in mapping)) {
-      onChange({ ...mapping, [key]: "todo" });
+  function generateDefaults(): Record<string, string> {
+    const defaults: Record<string, string> = {};
+    for (const state of workflowStates) {
+      defaults[state.name] = defaultMappingForType(state.type);
     }
+    return defaults;
   }
 
-  const rows = Object.entries(mapping);
+  if (statesLoading) {
+    return <div style={helpTextStyle}>Loading workflow states...</div>;
+  }
+
+  if (workflowStates.length === 0) {
+    return (
+      <div style={{ ...helpTextStyle, fontStyle: "italic" }}>
+        Select a team above to load workflow states.
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "grid", gap: "8px" }}>
-      {rows.length > 0 ? (
-        <table style={tableStyle}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Linear Workflow State</th>
-              <th style={thStyle}>Paperclip Status</th>
-              <th style={{ ...thStyle, width: 32 }} />
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            <th style={thStyle}>Linear Workflow State</th>
+            <th style={{ ...thStyle, width: 100 }}>Type</th>
+            <th style={thStyle}>Paperclip Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {workflowStates.map((state) => (
+            <tr key={state.id}>
+              <td style={{ ...tdStyle, fontWeight: 500 }}>{state.name}</td>
+              <td style={{ ...tdStyle, color: "var(--muted-foreground, #6b7280)", fontSize: "12px" }}>
+                {state.type}
+              </td>
+              <td style={tdStyle}>
+                <select
+                  style={selectStyle}
+                  value={mapping[state.name] ?? ""}
+                  onChange={(e) => {
+                    onChange({ ...mapping, [state.name]: e.target.value });
+                  }}
+                >
+                  <option value="" disabled>— select —</option>
+                  {PAPERCLIP_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {rows.map(([linearState, pcStatus]) => (
-              <tr key={linearState}>
-                <td style={tdStyle}>
-                  {statesLoading ? (
-                    <input
-                      style={inputStyle}
-                      value={linearState}
-                      onChange={(e) => {
-                        const next = { ...mapping };
-                        delete next[linearState];
-                        next[e.target.value] = pcStatus;
-                        onChange(next);
-                      }}
-                    />
-                  ) : workflowStates.length > 0 ? (
-                    <select
-                      style={selectStyle}
-                      value={linearState}
-                      onChange={(e) => {
-                        const next = { ...mapping };
-                        delete next[linearState];
-                        next[e.target.value] = pcStatus;
-                        onChange(next);
-                      }}
-                    >
-                      {workflowStates.map((s) => (
-                        <option key={s.id} value={s.name}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      style={inputStyle}
-                      value={linearState}
-                      onChange={(e) => {
-                        const next = { ...mapping };
-                        delete next[linearState];
-                        next[e.target.value] = pcStatus;
-                        onChange(next);
-                      }}
-                    />
-                  )}
-                </td>
-                <td style={tdStyle}>
-                  <select
-                    style={selectStyle}
-                    value={pcStatus}
-                    onChange={(e) => setRow(linearState, e.target.value)}
-                  >
-                    {PAPERCLIP_STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td style={tdStyle}>
-                  <button
-                    type="button"
-                    style={dangerButtonStyle}
-                    onClick={() => removeRow(linearState)}
-                    title="Remove mapping"
-                  >
-                    ×
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <div style={{ ...helpTextStyle, fontStyle: "italic" }}>
-          No status mappings defined. Add rows below or select a team to auto-populate.
-        </div>
-      )}
+          ))}
+        </tbody>
+      </table>
       <div>
-        <button type="button" style={secondaryButtonStyle} onClick={addRow}>
-          + Add mapping
+        <button
+          type="button"
+          style={secondaryButtonStyle}
+          onClick={() => onChange(generateDefaults())}
+        >
+          Reset to defaults
         </button>
       </div>
     </div>
@@ -548,7 +516,6 @@ function LinearProjectMappingEditor({
               <tr key={lp.id}>
                 <td style={tdStyle}>
                   <span style={{ fontWeight: 500 }}>{lp.name}</span>
-                  <span style={{ ...helpTextStyle, marginLeft: 6 }}>[{lp.key}]</span>
                 </td>
                 <td style={tdStyle}>
                   {paperclipProjectsLoading ? (
@@ -616,6 +583,129 @@ function LinearProjectMappingEditor({
 }
 
 // ---------------------------------------------------------------------------
+// LinearUserAgentMappingEditor
+// ---------------------------------------------------------------------------
+
+type LinearUserAgentMappingEditorProps = {
+  linearUsers: LinearUser[];
+  linearUsersLoading: boolean;
+  agents: PaperclipAgent[];
+  agentsLoading: boolean;
+  mapping: Record<string, string>;
+  fallbackAgentId: string | undefined;
+  onChange: (mapping: Record<string, string>) => void;
+  onFallbackChange: (agentId: string | undefined) => void;
+};
+
+function LinearUserAgentMappingEditor({
+  linearUsers,
+  linearUsersLoading,
+  agents,
+  agentsLoading,
+  mapping,
+  fallbackAgentId,
+  onChange,
+  onFallbackChange,
+}: LinearUserAgentMappingEditorProps) {
+  if (linearUsersLoading) {
+    return <div style={helpTextStyle}>Loading Linear users…</div>;
+  }
+
+  if (linearUsers.length === 0) {
+    return (
+      <div style={helpTextStyle}>
+        No Linear users found. Configure your API key and test the connection first.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "12px" }}>
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            <th style={thStyle}>Linear User</th>
+            <th style={thStyle}>Paperclip Agent</th>
+            <th style={{ ...thStyle, width: 80 }}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {linearUsers.map((user) => {
+            const mapped = mapping[user.id];
+            return (
+              <tr key={user.id}>
+                <td style={tdStyle}>
+                  <span style={{ fontWeight: 500 }}>{user.displayName || user.name}</span>
+                  <span style={{ ...helpTextStyle, marginLeft: 6 }}>{user.email}</span>
+                </td>
+                <td style={tdStyle}>
+                  {agentsLoading ? (
+                    <span style={helpTextStyle}>Loading…</span>
+                  ) : (
+                    <select
+                      style={selectStyle}
+                      value={mapped ?? ""}
+                      onChange={(e) => {
+                        const next = { ...mapping };
+                        if (e.target.value) {
+                          next[user.id] = e.target.value;
+                        } else {
+                          delete next[user.id];
+                        }
+                        onChange(next);
+                      }}
+                    >
+                      <option value="">— not mapped —</option>
+                      {agents.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                          {a.title ? ` (${a.title})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </td>
+                <td style={tdStyle}>
+                  {mapped ? (
+                    <span style={{ color: "var(--success, #16a34a)", fontSize: 12 }}>✓ mapped</span>
+                  ) : (
+                    <span style={{ color: "var(--warning, #d97706)", fontSize: 12 }}>unmapped</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <label style={labelStyle}>
+        <span style={labelTextStyle}>Fallback agent</span>
+        <span style={helpTextStyle}>
+          Issues from unmapped or unassigned Linear users go here. If unset, unassigned issues have no Paperclip assignee.
+        </span>
+        {agentsLoading ? (
+          <span style={helpTextStyle}>Loading…</span>
+        ) : (
+          <select
+            style={selectStyle}
+            value={fallbackAgentId ?? ""}
+            onChange={(e) => onFallbackChange(e.target.value || undefined)}
+          >
+            <option value="">— no fallback —</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+                {a.title ? ` (${a.title})` : ""}
+              </option>
+            ))}
+          </select>
+        )}
+      </label>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main settings page
 // ---------------------------------------------------------------------------
 
@@ -627,6 +717,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
   // Data fetching
   const teamsResult = usePluginData<TeamsData>("linear-teams");
   const linearProjectsResult = usePluginData<LinearProjectsData>("linear-projects");
+  const linearUsersResult = usePluginData<LinearUsersData>("linear-users");
   const projectsResult = usePluginData<ProjectsData>("paperclip-projects", {
     companyId: companyId ?? undefined,
   });
@@ -646,31 +737,108 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
 
   const [testing, setTesting] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
-  const [showApiKeyRef, setShowApiKeyRef] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const hasUserClearedMapping = useRef(false);
 
   function set<K extends keyof PluginConfig>(key: K, value: PluginConfig[K]) {
     setConfig((c) => ({ ...c, [key]: value }));
   }
 
+  /**
+   * Store the API key as a Paperclip company secret and return its UUID.
+   * If a secret named "linear-api-key" already exists, rotate it instead
+   * of creating a duplicate.
+   */
+  async function storeApiKeySecret(rawKey: string): Promise<string> {
+    if (!companyId) throw new Error("No company context available");
+
+    // Check if a secret with this name already exists
+    const existing = await hostFetchJson<Array<{ id: string; name: string }>>(
+      `/api/companies/${companyId}/secrets`,
+    );
+    const found = existing.find((s) => s.name === "linear-api-key");
+
+    if (found) {
+      // Rotate the existing secret with the new value
+      await hostFetchJson<{ id: string }>(`/api/secrets/${found.id}/rotate`, {
+        method: "POST",
+        body: JSON.stringify({ value: rawKey }),
+      });
+      return found.id;
+    }
+
+    // Create a new secret
+    const created = await hostFetchJson<{ id: string }>(
+      `/api/companies/${companyId}/secrets`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name: "linear-api-key",
+          value: rawKey,
+          description: "Linear API key for the Linear Sync plugin",
+        }),
+      },
+    );
+    return created.id;
+  }
+
   async function handleTestConnection() {
-    if (!config.linearApiKeyRef) {
-      toast({ title: "No API key configured", tone: "warn" });
+    const rawKey = apiKeyInput.trim();
+
+    // Need either a new key in the input or an existing configured ref
+    if (!rawKey && !config.linearApiKeyRef) {
+      toast({ title: "No API key provided", tone: "warn" });
       return;
     }
+
     setTesting(true);
     try {
-      const result = (await testConnection({ apiKeyRef: config.linearApiKeyRef })) as {
+      // Test the connection first — before saving anything.
+      // If user pasted a raw key, send it directly to avoid needing
+      // a saved config (which may fail schema validation during upgrades).
+      const actionParams = rawKey
+        ? { rawApiKey: rawKey }
+        : { apiKeyRef: config.linearApiKeyRef };
+
+      const result = (await testConnection(actionParams)) as {
         success: boolean;
         userName?: string;
       };
-      if (result?.success) {
-        toast({
-          title: "Connection successful",
-          body: result.userName ? `Authenticated as ${result.userName}` : undefined,
-          tone: "success",
-        });
-        connectionResult.refresh();
+
+      if (!result?.success) {
+        toast({ title: "Connection failed", tone: "error" });
+        return;
       }
+
+      // Connection succeeded — now store the secret and save config
+      if (rawKey) {
+        const secretId = await storeApiKeySecret(rawKey);
+        setApiKeyInput("");
+
+        // Patch only linearApiKeyRef into the server's existing config.
+        // Also fix any legacy field values that no longer match the schema.
+        const serverState = await hostFetchJson<{ configJson?: Record<string, unknown> | null }>(
+          `/api/plugins/${PLUGIN_ID}/config`,
+        );
+        const serverConfig = { ...serverState?.configJson ?? {} };
+        const validAssigneeModes = ["fixed_agent", "mapped"];
+        if (serverConfig.assigneeMode && !validAssigneeModes.includes(serverConfig.assigneeMode as string)) {
+          serverConfig.assigneeMode = "fixed_agent";
+        }
+        serverConfig.linearApiKeyRef = secretId;
+        await hostFetchJson(`/api/plugins/${PLUGIN_ID}/config`, {
+          method: "POST",
+          body: JSON.stringify({ configJson: serverConfig }),
+        });
+        set("linearApiKeyRef", secretId);
+      }
+
+      toast({
+        title: "Connection successful",
+        body: result.userName ? `Authenticated as ${result.userName}` : undefined,
+        tone: "success",
+      });
+      connectionResult.refresh();
     } catch (err) {
       const message =
         err instanceof Error
@@ -700,9 +868,11 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
     }
   }
 
-  // Auto-populate status mapping when a team is selected and no mapping exists
+  // Auto-populate status mapping when a team is selected and no mapping exists.
+  // Skip if the user has intentionally cleared all mappings.
   useEffect(() => {
     if (
+      !hasUserClearedMapping.current &&
       statesResult.data?.states &&
       statesResult.data.states.length > 0 &&
       (!config.statusMapping || Object.keys(config.statusMapping).length === 0)
@@ -732,6 +902,7 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
 
   const teams = teamsResult.data?.teams ?? [];
   const linearProjects = linearProjectsResult.data?.projects ?? [];
+  const linearUsers = linearUsersResult.data?.users ?? [];
   const projects = projectsResult.data?.projects ?? [];
   const agents = agentsResult.data?.agents ?? [];
   const workflowStates = statesResult.data?.states ?? [];
@@ -751,40 +922,27 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
         <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 600 }}>API Key</h2>
 
         <label style={labelStyle}>
-          <span style={labelTextStyle}>Linear API Key (Secret Reference)</span>
+          <span style={labelTextStyle}>Linear API Key</span>
           <span style={helpTextStyle}>
-            Enter the name of a Paperclip company secret that contains your Linear API key.
+            {config.linearApiKeyRef
+              ? "API key is configured. Paste a new key below to replace it."
+              : "Paste your Linear personal API key. It will be securely stored as a Paperclip secret."}
           </span>
-          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-            <input
-              style={{ ...inputStyle, flex: 1 }}
-              type={showApiKeyRef ? "text" : "password"}
-              value={config.linearApiKeyRef ?? ""}
-              placeholder="e.g. linear-api-key"
-              onChange={(e) => set("linearApiKeyRef", e.target.value || undefined)}
-              autoComplete="off"
-            />
-            <button
-              type="button"
-              style={{
-                ...secondaryButtonStyle,
-                flexShrink: 0,
-                padding: "6px 10px",
-                fontSize: "12px",
-              }}
-              onClick={() => setShowApiKeyRef((v) => !v)}
-              title={showApiKeyRef ? "Hide" : "Show"}
-            >
-              {showApiKeyRef ? "Hide" : "Show"}
-            </button>
-          </div>
+          <input
+            style={inputStyle}
+            type="password"
+            value={apiKeyInput}
+            placeholder={config.linearApiKeyRef ? "••••••••••• (configured)" : "lin_api_…"}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            autoComplete="off"
+          />
         </label>
 
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
           <button
             type="button"
             style={secondaryButtonStyle}
-            disabled={testing || !config.linearApiKeyRef}
+            disabled={testing || (!config.linearApiKeyRef && !apiKeyInput)}
             onClick={handleTestConnection}
           >
             {testing ? "Testing…" : "Test Connection"}
@@ -894,9 +1052,8 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
         <div style={{ display: "grid", gap: "8px" }}>
           {(
             [
-              { value: "issue_manager", label: "Issue Manager", help: "Route all incoming issues to a triage agent" },
               { value: "fixed_agent", label: "Fixed Agent", help: "Assign all issues to a single agent" },
-              { value: "mapped", label: "Mapped", help: "Use a custom assignment mapping" },
+              { value: "mapped", label: "Mapped", help: "Map Linear users to Paperclip agents" },
             ] as const
           ).map(({ value, label, help }) => (
             <label key={value} style={radioRowStyle}>
@@ -914,25 +1071,6 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
             </label>
           ))}
         </div>
-
-        {config.assigneeMode === "issue_manager" && (
-          <label style={labelStyle}>
-            <span style={labelTextStyle}>Issue Manager Agent</span>
-            <select
-              style={selectStyle}
-              value={config.issueManagerAgentId ?? ""}
-              onChange={(e) => set("issueManagerAgentId", e.target.value || undefined)}
-            >
-              <option value="">— select agent —</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                  {a.title ? ` (${a.title})` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
 
         {config.assigneeMode === "fixed_agent" && (
           <label style={labelStyle}>
@@ -952,6 +1090,19 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
             </select>
           </label>
         )}
+
+        {config.assigneeMode === "mapped" && (
+          <LinearUserAgentMappingEditor
+            linearUsers={linearUsers}
+            linearUsersLoading={linearUsersResult.loading}
+            agents={agents}
+            agentsLoading={agentsResult.loading}
+            mapping={config.linearUserAgentMapping ?? {}}
+            fallbackAgentId={config.mappedFallbackAgentId}
+            onChange={(m) => set("linearUserAgentMapping", m)}
+            onFallbackChange={(v) => set("mappedFallbackAgentId", v)}
+          />
+        )}
       </section>
 
       {/* ------------------------------------------------------------------ */}
@@ -966,7 +1117,10 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
           mapping={config.statusMapping ?? {}}
           workflowStates={workflowStates}
           statesLoading={statesResult.loading}
-          onChange={(m) => set("statusMapping", m)}
+          onChange={(m) => {
+            hasUserClearedMapping.current = Object.keys(m).length === 0;
+            set("statusMapping", m);
+          }}
         />
       </section>
 
@@ -1011,6 +1165,19 @@ export function LinearSyncSettingsPage({ context }: PluginSettingsPageProps) {
           />
           <span>Enable priority sync</span>
         </label>
+
+        <label style={checkboxRowStyle}>
+          <input
+            type="checkbox"
+            checked={config.agentAutoInvokeEnabled !== false}
+            onChange={(e) => set("agentAutoInvokeEnabled", e.target.checked)}
+          />
+          <span>Auto-invoke agents</span>
+        </label>
+        <span style={{ ...helpTextStyle, marginTop: "-8px" }}>
+          Automatically invoke the assigned agent when a new issue is synced or an
+          issue&apos;s status changes to an active state (in_progress, in_review).
+        </span>
       </section>
 
       {/* ------------------------------------------------------------------ */}

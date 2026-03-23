@@ -564,7 +564,7 @@ const INTEGRATION_BASE_CONFIG = {
   linearApiKeyRef: "secret:linear-key",
   syncLabelName: "Paperclip",
   pollIntervalSeconds: 60,
-  assigneeMode: "issue_manager",
+  assigneeMode: "fixed_agent",
   syncDirection: "bidirectional",
   commentSyncEnabled: false,
   prioritySyncEnabled: true,

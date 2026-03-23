@@ -153,22 +153,22 @@ describe("EntityMapper", () => {
   // findByLinearIdStrict
   // ---------------------------------------------------------------------------
 
-  it("findByLinearIdStrict returns paperclipId for consistent mapping", async () => {
+  it("findByLinearIdStrict returns found for consistent mapping", async () => {
     await mapper.linkIssue("lin-123", "pc-456");
     const warnLogger = { warn: vi.fn() };
     const result = await mapper.findByLinearIdStrict("lin-123", warnLogger);
-    expect(result).toBe("pc-456");
+    expect(result).toEqual({ status: "found", id: "pc-456" });
     expect(warnLogger.warn).not.toHaveBeenCalled();
   });
 
-  it("findByLinearIdStrict returns null (no warning) for unknown linearId", async () => {
+  it("findByLinearIdStrict returns not_found (no warning) for unknown linearId", async () => {
     const warnLogger = { warn: vi.fn() };
     const result = await mapper.findByLinearIdStrict("lin-unknown", warnLogger);
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: "not_found" });
     expect(warnLogger.warn).not.toHaveBeenCalled();
   });
 
-  it("findByLinearIdStrict returns null and warns on forward/reverse mismatch", async () => {
+  it("findByLinearIdStrict returns inconsistent and warns on forward/reverse mismatch", async () => {
     const warnLogger = { warn: vi.fn() };
     // Simulate: lin-A → pc-X forward, but pc-X → lin-B reverse (corrupted state)
     vi.spyOn(harness.ctx.entities, "list").mockImplementation(async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
@@ -184,7 +184,7 @@ describe("EntityMapper", () => {
     });
 
     const result = await mapper.findByLinearIdStrict("lin-A", warnLogger);
-    expect(result).toBeNull();
+    expect(result.status).toBe("inconsistent");
     expect(warnLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining("inconsistent"),
       expect.objectContaining({ linearIssueId: "lin-A" }),
@@ -215,29 +215,38 @@ describe("EntityMapper", () => {
       expect.objectContaining({ linearIssueId: "lin-A", count: 2 }),
     );
     // First record's reverse lookup passes → returns pc-X
-    expect(result).toBe("pc-X");
+    expect(result).toEqual({ status: "found", id: "pc-X" });
+  });
+
+  it("findByLinearIdStrict filters out unlinked entities", async () => {
+    await mapper.linkIssue("lin-123", "pc-456");
+    await mapper.unlinkIssue("lin-123");
+    const warnLogger = { warn: vi.fn() };
+    const result = await mapper.findByLinearIdStrict("lin-123", warnLogger);
+    expect(result).toEqual({ status: "not_found" });
+    expect(warnLogger.warn).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------------
   // findByPaperclipIdStrict
   // ---------------------------------------------------------------------------
 
-  it("findByPaperclipIdStrict returns linearId for consistent mapping", async () => {
+  it("findByPaperclipIdStrict returns found for consistent mapping", async () => {
     await mapper.linkIssue("lin-123", "pc-456");
     const warnLogger = { warn: vi.fn() };
     const result = await mapper.findByPaperclipIdStrict("pc-456", warnLogger);
-    expect(result).toBe("lin-123");
+    expect(result).toEqual({ status: "found", id: "lin-123" });
     expect(warnLogger.warn).not.toHaveBeenCalled();
   });
 
-  it("findByPaperclipIdStrict returns null (no warning) for unknown paperclipId", async () => {
+  it("findByPaperclipIdStrict returns not_found (no warning) for unknown paperclipId", async () => {
     const warnLogger = { warn: vi.fn() };
     const result = await mapper.findByPaperclipIdStrict("pc-unknown", warnLogger);
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: "not_found" });
     expect(warnLogger.warn).not.toHaveBeenCalled();
   });
 
-  it("findByPaperclipIdStrict returns null and warns on reverse/forward mismatch", async () => {
+  it("findByPaperclipIdStrict returns inconsistent and warns on reverse/forward mismatch", async () => {
     const warnLogger = { warn: vi.fn() };
     // pc-X → lin-A reverse, but lin-A → pc-Y forward (corrupted state)
     vi.spyOn(harness.ctx.entities, "list").mockImplementation(async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
@@ -253,7 +262,7 @@ describe("EntityMapper", () => {
     });
 
     const result = await mapper.findByPaperclipIdStrict("pc-X", warnLogger);
-    expect(result).toBeNull();
+    expect(result.status).toBe("inconsistent");
     expect(warnLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining("inconsistent"),
       expect.objectContaining({ paperclipIssueId: "pc-X" }),
@@ -665,6 +674,7 @@ describe("EntityMapper strict methods — handler integration", () => {
     );
 
     const updateSpy = vi.spyOn(harness.ctx.issues, "update");
+    const createSpy = vi.spyOn(harness.ctx.issues, "create");
 
     // Mock Linear API returning lin-1 as a labeled issue
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -717,6 +727,8 @@ describe("EntityMapper strict methods — handler integration", () => {
 
     // update("pc-1", ...) must NOT be called — the corrupted mapping was rejected
     expect(updateSpy).not.toHaveBeenCalledWith("pc-1", expect.anything(), expect.anything());
+    // No new issue created either — inconsistent mapping is skipped, not treated as new
+    expect(createSpy).not.toHaveBeenCalled();
     // A warning about the inconsistency must have been logged via ctx.logger.warn
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("inconsistent"),

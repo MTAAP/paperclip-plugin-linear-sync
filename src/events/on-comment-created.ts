@@ -98,12 +98,17 @@ export async function handleCommentCreated(
 
   // 5. Look up linked Linear issue (strict: validates bidirectional consistency)
   const entityMapper = new EntityMapper(ctx);
-  const linearIssueId = await entityMapper.findByPaperclipIdStrict(issueId, ctx.logger);
+  const lookup = await entityMapper.findByPaperclipIdStrict(issueId, ctx.logger);
 
-  if (!linearIssueId) {
-    ctx.logger.debug("handleCommentCreated: issue not linked or mapping inconsistent, skipping", { issueId });
+  if (lookup.status !== "found") {
+    ctx.logger.debug("handleCommentCreated: issue not linked or mapping inconsistent, skipping", {
+      issueId,
+      lookupStatus: lookup.status,
+    });
     return;
   }
+
+  const linearIssueId = lookup.id;
 
   ctx.logger.info("issue.comment.created: resolved linked pair", {
     paperclipIssueId: issueId,

@@ -18,6 +18,11 @@ export interface ListLinkedIssuesOptions {
   offset?: number;
 }
 
+export type StrictLookupResult =
+  | { status: "found"; id: string }
+  | { status: "not_found" }
+  | { status: "inconsistent"; reason: string };
+
 /**
  * Manages the bidirectional mapping between Linear issue IDs and Paperclip
  * issue IDs using `ctx.entities`.
@@ -105,14 +110,13 @@ export class EntityMapper {
 
   /**
    * Strict forward lookup: find the Paperclip issue ID for a Linear issue ID,
-   * with bidirectional validation. Returns null if no mapping exists, if the
-   * mapping is inconsistent (forward/reverse mismatch), or if duplicate entries
-   * are detected (warns on duplicates but continues with the first result).
+   * with bidirectional validation. Returns a discriminated result so callers
+   * can distinguish "not found" from "found but corrupted."
    */
   async findByLinearIdStrict(
     linearIssueId: string,
     logger?: { warn: (message: string, meta?: Record<string, unknown>) => void },
-  ): Promise<string | null> {
+  ): Promise<StrictLookupResult> {
     // Query with a higher limit to detect duplicates.
     const allResults = await this.ctx.entities.list({
       entityType: "linear-issue",
@@ -120,40 +124,43 @@ export class EntityMapper {
       limit: 10,
     });
 
-    if (allResults.length > 1) {
+    // Filter out unlinked entities (matching findByPaperclipIdStrict behavior).
+    const linkedResults = allResults.filter((r) => r.status !== "unlinked" && r.scopeId);
+
+    if (linkedResults.length > 1) {
       logger?.warn("entity-mapper: duplicate entities detected for linearId", {
         linearIssueId,
-        count: allResults.length,
+        count: linkedResults.length,
       });
     }
 
-    const paperclipId = allResults[0]?.scopeId ?? null;
-    if (!paperclipId) return null;
+    const paperclipId = linkedResults[0]?.scopeId ?? null;
+    if (!paperclipId) return { status: "not_found" };
 
     // Verify reverse direction.
     const reverseLinearId = await this.findByPaperclipId(paperclipId);
     if (reverseLinearId !== linearIssueId) {
-      logger?.warn("entity-mapper: inconsistent mapping for linearId (reverse lookup mismatch)", {
+      const reason = `reverse lookup mismatch: paperclipId ${paperclipId} maps to ${reverseLinearId ?? "null"}, expected ${linearIssueId}`;
+      logger?.warn("entity-mapper: inconsistent mapping for linearId", {
         linearIssueId,
         paperclipId,
         reverseLinearId: reverseLinearId ?? null,
       });
-      return null;
+      return { status: "inconsistent", reason };
     }
 
-    return paperclipId;
+    return { status: "found", id: paperclipId };
   }
 
   /**
    * Strict reverse lookup: find the Linear issue ID for a Paperclip issue ID,
-   * with bidirectional validation. Returns null if no mapping exists, if the
-   * mapping is inconsistent (reverse/forward mismatch), or if duplicate linked
-   * entries are detected (warns on duplicates but continues with the first).
+   * with bidirectional validation. Returns a discriminated result so callers
+   * can distinguish "not found" from "found but corrupted."
    */
   async findByPaperclipIdStrict(
     paperclipIssueId: string,
     logger?: { warn: (message: string, meta?: Record<string, unknown>) => void },
-  ): Promise<string | null> {
+  ): Promise<StrictLookupResult> {
     // Query with a higher limit to detect duplicates.
     const allResults = await this.ctx.entities.list({
       entityType: "linear-issue",
@@ -171,22 +178,23 @@ export class EntityMapper {
     }
 
     const entity = linkedResults[0];
-    if (!entity || !entity.externalId) return null;
+    if (!entity || !entity.externalId) return { status: "not_found" };
 
     const linearId = entity.externalId;
 
     // Verify forward direction.
     const forwardPcId = await this.findByLinearId(linearId);
     if (forwardPcId !== paperclipIssueId) {
-      logger?.warn("entity-mapper: inconsistent mapping for paperclipId (forward lookup mismatch)", {
+      const reason = `forward lookup mismatch: linearId ${linearId} maps to ${forwardPcId ?? "null"}, expected ${paperclipIssueId}`;
+      logger?.warn("entity-mapper: inconsistent mapping for paperclipId", {
         paperclipIssueId,
         linearId,
         forwardPcId: forwardPcId ?? null,
       });
-      return null;
+      return { status: "inconsistent", reason };
     }
 
-    return linearId;
+    return { status: "found", id: linearId };
   }
 
   /**

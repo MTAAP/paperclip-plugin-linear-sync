@@ -222,7 +222,7 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
         continue;
       }
 
-      const existingPaperclipId = await entityMapper.findByLinearId(issue.id);
+      const existingPaperclipId = await entityMapper.findByLinearIdStrict(issue.id, ctx.logger);
 
       if (!existingPaperclipId) {
         // --- New issue: import into Paperclip ---
@@ -294,6 +294,11 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
           }
         }
 
+        ctx.logger.info("linear-poll: updating linked issue", {
+          linearIssueId: issue.id,
+          paperclipIssueId: existingPaperclipId,
+          linearTitle: issue.title,
+        });
         await ctx.issues.update(existingPaperclipId, patch, companyId);
         await echoGuard.recordWrite(existingPaperclipId, "linear");
         updatedCount++;

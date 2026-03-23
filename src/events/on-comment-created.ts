@@ -83,14 +83,19 @@ export async function handleCommentCreated(
     return;
   }
 
-  // 5. Look up linked Linear issue
+  // 5. Look up linked Linear issue (strict: validates bidirectional consistency)
   const entityMapper = new EntityMapper(ctx);
-  const linearIssueId = await entityMapper.findByPaperclipId(issueId);
+  const linearIssueId = await entityMapper.findByPaperclipIdStrict(issueId, ctx.logger);
 
   if (!linearIssueId) {
-    // Not a linked issue — silently skip
+    // Not a linked issue (or mapping is inconsistent) — silently skip
     return;
   }
+
+  ctx.logger.info("issue.comment.created: resolved linked pair", {
+    paperclipIssueId: issueId,
+    linearIssueId,
+  });
 
   // 6. Resolve company ID (single call, reused below for agent lookup and activity)
   const companies = await ctx.companies.list({ limit: 1 });

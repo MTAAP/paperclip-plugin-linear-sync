@@ -291,7 +291,17 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
         continue;
       }
 
-      const existingPaperclipId = await entityMapper.findByLinearId(issue.id);
+      const lookup = await entityMapper.findByLinearIdStrict(issue.id, ctx.logger);
+
+      if (lookup.status === "inconsistent") {
+        ctx.logger.warn("linear-poll: skipping issue with inconsistent mapping", {
+          linearIssueId: issue.id,
+          reason: lookup.reason,
+        });
+        continue;
+      }
+
+      const existingPaperclipId = lookup.status === "found" ? lookup.id : null;
 
       if (!existingPaperclipId) {
         // --- New issue: import into Paperclip ---
@@ -381,6 +391,11 @@ export async function runLinearPoll(ctx: PluginContext, _job: PluginJobContext):
           }
         }
 
+        ctx.logger.info("linear-poll: updating linked issue", {
+          linearIssueId: issue.id,
+          paperclipIssueId: existingPaperclipId,
+          linearTitle: issue.title,
+        });
         await ctx.issues.update(existingPaperclipId, patch, companyId);
         await echoGuard.recordWrite(existingPaperclipId, "linear");
         updatedCount++;

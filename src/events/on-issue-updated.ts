@@ -44,14 +44,24 @@ export async function handleIssueUpdated(
     return;
   }
 
-  // 3. Look up linked Linear issue
+  // 3. Look up linked Linear issue (strict: validates bidirectional consistency)
   const entityMapper = new EntityMapper(ctx);
-  const linearIssueId = await entityMapper.findByPaperclipId(issueId);
+  const lookup = await entityMapper.findByPaperclipIdStrict(issueId, ctx.logger);
 
-  if (!linearIssueId) {
-    // Not a linked issue — silently skip
+  if (lookup.status !== "found") {
+    ctx.logger.debug("handleIssueUpdated: issue not linked or mapping inconsistent, skipping", {
+      issueId,
+      lookupStatus: lookup.status,
+    });
     return;
   }
+
+  const linearIssueId = lookup.id;
+
+  ctx.logger.info("issue.updated: resolved linked pair", {
+    paperclipIssueId: issueId,
+    linearIssueId,
+  });
 
   // 4. Check echo guard
   const echoGuard = new EchoGuard(ctx);

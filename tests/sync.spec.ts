@@ -1,6 +1,8 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createTestHarness, type TestHarness } from "@paperclipai/plugin-sdk/testing";
+import type { PluginCapability } from "@paperclipai/plugin-sdk";
 import manifest from "../src/manifest.js";
+import plugin from "../src/worker.js";
 import { EntityMapper } from "../src/sync/entity-mapper.js";
 import { StateTracker } from "../src/sync/state-tracker.js";
 import { EchoGuard } from "../src/sync/echo-guard.js";
@@ -118,6 +120,178 @@ describe("EntityMapper", () => {
     // Still only one record
     const pairs = await mapper.listLinkedIssues();
     expect(pairs).toHaveLength(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // validateLink
+  // ---------------------------------------------------------------------------
+
+  it("validateLink returns valid for correct 1:1 mapping", async () => {
+    await mapper.linkIssue("lin-123", "pc-456");
+    const result = await mapper.validateLink("lin-123", "pc-456");
+    expect(result.valid).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("validateLink returns invalid when forward lookup mismatches (unknown linearId)", async () => {
+    await mapper.linkIssue("lin-123", "pc-456");
+    // lin-999 is not mapped — forward lookup returns null ≠ "pc-456"
+    const result = await mapper.validateLink("lin-999", "pc-456");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/forward lookup mismatch/);
+  });
+
+  it("validateLink returns invalid when reverse lookup mismatches (unknown paperclipId)", async () => {
+    await mapper.linkIssue("lin-123", "pc-456");
+    // lin-123 → pc-456, but pc-999 → null ≠ "lin-123"
+    const result = await mapper.validateLink("lin-123", "pc-999");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/forward lookup mismatch|reverse lookup mismatch/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // findByLinearIdStrict
+  // ---------------------------------------------------------------------------
+
+  it("findByLinearIdStrict returns found for consistent mapping", async () => {
+    await mapper.linkIssue("lin-123", "pc-456");
+    const warnLogger = { warn: vi.fn() };
+    const result = await mapper.findByLinearIdStrict("lin-123", warnLogger);
+    expect(result).toEqual({ status: "found", id: "pc-456" });
+    expect(warnLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("findByLinearIdStrict returns not_found (no warning) for unknown linearId", async () => {
+    const warnLogger = { warn: vi.fn() };
+    const result = await mapper.findByLinearIdStrict("lin-unknown", warnLogger);
+    expect(result).toEqual({ status: "not_found" });
+    expect(warnLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("findByLinearIdStrict returns inconsistent and warns on forward/reverse mismatch", async () => {
+    const warnLogger = { warn: vi.fn() };
+    // Simulate: lin-A → pc-X forward, but pc-X → lin-B reverse (corrupted state)
+    vi.spyOn(harness.ctx.entities, "list").mockImplementation(async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
+      const q = opts as Record<string, unknown>;
+      if (q["externalId"] === "lin-A") {
+        return [{ id: "e1", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
+      }
+      if (q["scopeId"] === "pc-X") {
+        // Reverse lookup returns lin-B — mismatch!
+        return [{ id: "e2", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-B", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
+      }
+      return [];
+    });
+
+    const result = await mapper.findByLinearIdStrict("lin-A", warnLogger);
+    expect(result.status).toBe("inconsistent");
+    expect(warnLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("inconsistent"),
+      expect.objectContaining({ linearIssueId: "lin-A" }),
+    );
+  });
+
+  it("findByLinearIdStrict warns on duplicate entries and still validates", async () => {
+    const warnLogger = { warn: vi.fn() };
+    // Two records for lin-A (duplicate), but first passes reverse check
+    vi.spyOn(harness.ctx.entities, "list").mockImplementation(async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
+      const q = opts as Record<string, unknown>;
+      if (q["externalId"] === "lin-A") {
+        return [
+          { id: "e1", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+          { id: "e2", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-Y", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        ];
+      }
+      if (q["scopeId"] === "pc-X") {
+        // Reverse lookup for first result passes
+        return [{ id: "e1", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
+      }
+      return [];
+    });
+
+    const result = await mapper.findByLinearIdStrict("lin-A", warnLogger);
+    expect(warnLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("duplicate"),
+      expect.objectContaining({ linearIssueId: "lin-A", count: 2 }),
+    );
+    // First record's reverse lookup passes → returns pc-X
+    expect(result).toEqual({ status: "found", id: "pc-X" });
+  });
+
+  it("findByLinearIdStrict filters out unlinked entities", async () => {
+    await mapper.linkIssue("lin-123", "pc-456");
+    await mapper.unlinkIssue("lin-123");
+    const warnLogger = { warn: vi.fn() };
+    const result = await mapper.findByLinearIdStrict("lin-123", warnLogger);
+    expect(result).toEqual({ status: "not_found" });
+    expect(warnLogger.warn).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // findByPaperclipIdStrict
+  // ---------------------------------------------------------------------------
+
+  it("findByPaperclipIdStrict returns found for consistent mapping", async () => {
+    await mapper.linkIssue("lin-123", "pc-456");
+    const warnLogger = { warn: vi.fn() };
+    const result = await mapper.findByPaperclipIdStrict("pc-456", warnLogger);
+    expect(result).toEqual({ status: "found", id: "lin-123" });
+    expect(warnLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("findByPaperclipIdStrict returns not_found (no warning) for unknown paperclipId", async () => {
+    const warnLogger = { warn: vi.fn() };
+    const result = await mapper.findByPaperclipIdStrict("pc-unknown", warnLogger);
+    expect(result).toEqual({ status: "not_found" });
+    expect(warnLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("findByPaperclipIdStrict returns inconsistent and warns on reverse/forward mismatch", async () => {
+    const warnLogger = { warn: vi.fn() };
+    // pc-X → lin-A reverse, but lin-A → pc-Y forward (corrupted state)
+    vi.spyOn(harness.ctx.entities, "list").mockImplementation(async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
+      const q = opts as Record<string, unknown>;
+      if (q["scopeId"] === "pc-X") {
+        return [{ id: "e1", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
+      }
+      if (q["externalId"] === "lin-A") {
+        // Forward lookup returns pc-Y — mismatch!
+        return [{ id: "e2", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-Y", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
+      }
+      return [];
+    });
+
+    const result = await mapper.findByPaperclipIdStrict("pc-X", warnLogger);
+    expect(result.status).toBe("inconsistent");
+    expect(warnLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("inconsistent"),
+      expect.objectContaining({ paperclipIssueId: "pc-X" }),
+    );
+  });
+
+  it("findByPaperclipIdStrict warns on duplicate linked entries", async () => {
+    const warnLogger = { warn: vi.fn() };
+    // Two linked entities for pc-X (lin-A and lin-B)
+    vi.spyOn(harness.ctx.entities, "list").mockImplementation(async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
+      const q = opts as Record<string, unknown>;
+      if (q["scopeId"] === "pc-X") {
+        return [
+          { id: "e1", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+          { id: "e2", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-B", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        ];
+      }
+      if (q["externalId"] === "lin-A") {
+        // Forward lookup for first result passes
+        return [{ id: "e1", entityType: "linear-issue", scopeKind: "issue", scopeId: "pc-X", externalId: "lin-A", title: null, status: "linked", data: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
+      }
+      return [];
+    });
+
+    await mapper.findByPaperclipIdStrict("pc-X", warnLogger);
+    expect(warnLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("duplicate"),
+      expect.objectContaining({ paperclipIssueId: "pc-X", count: 2 }),
+    );
   });
 });
 
@@ -386,5 +560,214 @@ describe("PriorityMapper — paperclipToLinear", () => {
   it("returns null for unknown priority strings", () => {
     expect(priorityPaperclipToLinear("unknown")).toBeNull();
     expect(priorityPaperclipToLinear("")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration: handlers skip operations when mapping is inconsistent
+// ---------------------------------------------------------------------------
+
+const INTEGRATION_COMPANY_ID = "company-strict-int-001";
+
+const INTEGRATION_BASE_CONFIG = {
+  linearApiKeyRef: "secret:linear-key",
+  syncLabelName: "Paperclip",
+  pollIntervalSeconds: 60,
+  assigneeMode: "fixed_agent",
+  syncDirection: "bidirectional",
+  commentSyncEnabled: false,
+  prioritySyncEnabled: true,
+  projectRoutingMode: "single",
+  targetProjectId: "proj-001",
+  statusMapping: { "In Progress": "in_progress" },
+};
+
+function makeIntegrationHarness(configOverrides?: Record<string, unknown>): TestHarness {
+  const capabilities = [...manifest.capabilities, "events.emit"] as PluginCapability[];
+  const harness = createTestHarness({
+    manifest,
+    capabilities,
+    config: { ...INTEGRATION_BASE_CONFIG, ...configOverrides },
+  });
+  harness.seed({
+    companies: [
+      {
+        id: INTEGRATION_COMPANY_ID,
+        name: "Test",
+        description: null,
+        status: "active",
+        pauseReason: null,
+        pausedAt: null,
+        issuePrefix: "T",
+        issueCounter: 0,
+        budgetMonthlyCents: 0,
+        spentMonthlyCents: 0,
+        requireBoardApprovalForNewAgents: false,
+        brandColor: null,
+        logoAssetId: null,
+        logoUrl: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ],
+  });
+  return harness;
+}
+
+/** Minimal fake PluginEntityRecord for mocking. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function fakeEntity(externalId: string, scopeId: string, status = "linked"): any {
+  return {
+    id: `ent-${externalId}-${scopeId}`,
+    entityType: "linear-issue",
+    scopeKind: "issue" as const,
+    scopeId,
+    externalId,
+    title: null,
+    status,
+    data: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+describe("EntityMapper strict methods — handler integration", () => {
+  let origFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("poll handler skips update (treats as new) when mapping is inconsistent", async () => {
+    const harness = makeIntegrationHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    // Seed lin-1 → pc-1 in the forward direction
+    await harness.ctx.entities.upsert({
+      entityType: "linear-issue",
+      scopeKind: "issue",
+      scopeId: "pc-1",
+      externalId: "lin-1",
+      title: "Test",
+      status: "linked",
+      data: {},
+    });
+
+    // Corrupt state: when pc-1 is looked up by scopeId, return lin-WRONG
+    vi.spyOn(harness.ctx.entities, "list").mockImplementation(
+      async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
+        const q = opts as Record<string, unknown>;
+        if (q["externalId"] === "lin-1") {
+          return [fakeEntity("lin-1", "pc-1")];
+        }
+        if (q["scopeId"] === "pc-1") {
+          // Reverse lookup returns lin-WRONG → mismatch with lin-1
+          return [fakeEntity("lin-WRONG", "pc-1")];
+        }
+        return [];
+      },
+    );
+
+    const updateSpy = vi.spyOn(harness.ctx.issues, "update");
+    const createSpy = vi.spyOn(harness.ctx.issues, "create");
+
+    // Mock Linear API returning lin-1 as a labeled issue
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "lin-1",
+                identifier: "ENG-1",
+                title: "Fix bug",
+                description: "desc",
+                priority: 2,
+                priorityLabel: "High",
+                createdAt: "2026-03-01T00:00:00Z",
+                updatedAt: "2026-03-20T10:00:00Z",
+                canceledAt: null,
+                completedAt: null,
+                url: "https://linear.app/issue/ENG-1",
+                state: {
+                  id: "s1", name: "In Progress", type: "started",
+                  color: "#ffd", description: null,
+                  team: { id: "t1", name: "Eng" },
+                },
+                team: { id: "t1", name: "Eng", key: "ENG" },
+                project: null,
+                assignee: null,
+                labels: {
+                  nodes: [{ id: "l1", name: "Paperclip", color: "#00f" }],
+                  pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
+                },
+                comments: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
+          },
+        },
+      }),
+    }) as unknown as typeof globalThis.fetch;
+
+    const warnSpy = vi.spyOn(harness.ctx.logger, "warn");
+
+    await harness.runJob("linear-poll");
+
+    // update("pc-1", ...) must NOT be called — the corrupted mapping was rejected
+    expect(updateSpy).not.toHaveBeenCalledWith("pc-1", expect.anything(), expect.anything());
+    // No new issue created either — inconsistent mapping is skipped, not treated as new
+    expect(createSpy).not.toHaveBeenCalled();
+    // A warning about the inconsistency must have been logged via ctx.logger.warn
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("inconsistent"),
+      expect.any(Object),
+    );
+  });
+
+  it("event handler skips Linear push when mapping is inconsistent", async () => {
+    const harness = makeIntegrationHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    // Seed entity so reverse lookup (pc-1 by scopeId) returns lin-WRONG
+    // Then forward lookup (lin-WRONG by externalId) returns pc-999 ≠ pc-1 → mismatch
+    vi.spyOn(harness.ctx.entities, "list").mockImplementation(
+      async (opts: Parameters<typeof harness.ctx.entities.list>[0]) => {
+        const q = opts as Record<string, unknown>;
+        if (q["scopeId"] === "pc-1") {
+          return [fakeEntity("lin-WRONG", "pc-1")];
+        }
+        if (q["externalId"] === "lin-WRONG") {
+          return [fakeEntity("lin-WRONG", "pc-999")]; // pc-999 ≠ pc-1 → mismatch
+        }
+        return [];
+      },
+    );
+
+    const mockFetch = vi.fn();
+    globalThis.fetch = mockFetch as unknown as typeof globalThis.fetch;
+
+    const warnSpy = vi.spyOn(harness.ctx.logger, "warn");
+
+    await harness.emit("issue.updated", { status: "in_progress" }, { entityId: "pc-1" });
+
+    // No HTTP call to Linear — the inconsistent mapping caused an early skip
+    expect(mockFetch).not.toHaveBeenCalled();
+    // A warning about the inconsistency must have been logged via ctx.logger.warn
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("inconsistent"),
+      expect.any(Object),
+    );
   });
 });

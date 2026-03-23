@@ -18,6 +18,11 @@ export interface ListLinkedIssuesOptions {
   offset?: number;
 }
 
+export type StrictLookupResult =
+  | { status: "found"; id: string }
+  | { status: "not_found" }
+  | { status: "inconsistent"; reason: string };
+
 /**
  * Manages the bidirectional mapping between Linear issue IDs and Paperclip
  * issue IDs using `ctx.entities`.
@@ -75,6 +80,121 @@ export class EntityMapper {
     const entity = results[0];
     if (!entity || entity.status === "unlinked") return null;
     return entity.externalId;
+  }
+
+  /**
+   * Validate that a (linearIssueId, paperclipIssueId) pair is consistent in
+   * both directions. Returns `{ valid: true }` if forward and reverse lookups
+   * agree, or `{ valid: false, reason }` on any mismatch.
+   */
+  async validateLink(
+    linearIssueId: string,
+    paperclipIssueId: string,
+  ): Promise<{ valid: boolean; reason?: string }> {
+    const forwardPcId = await this.findByLinearId(linearIssueId);
+    if (forwardPcId !== paperclipIssueId) {
+      return {
+        valid: false,
+        reason: `forward lookup mismatch: linearId ${linearIssueId} maps to ${forwardPcId ?? "null"}, expected ${paperclipIssueId}`,
+      };
+    }
+    const reverseLinearId = await this.findByPaperclipId(paperclipIssueId);
+    if (reverseLinearId !== linearIssueId) {
+      return {
+        valid: false,
+        reason: `reverse lookup mismatch: paperclipId ${paperclipIssueId} maps to ${reverseLinearId ?? "null"}, expected ${linearIssueId}`,
+      };
+    }
+    return { valid: true };
+  }
+
+  /**
+   * Strict forward lookup: find the Paperclip issue ID for a Linear issue ID,
+   * with bidirectional validation. Returns a discriminated result so callers
+   * can distinguish "not found" from "found but corrupted."
+   */
+  async findByLinearIdStrict(
+    linearIssueId: string,
+    logger?: { warn: (message: string, meta?: Record<string, unknown>) => void },
+  ): Promise<StrictLookupResult> {
+    // Query with a higher limit to detect duplicates.
+    const allResults = await this.ctx.entities.list({
+      entityType: "linear-issue",
+      externalId: linearIssueId,
+      limit: 10,
+    });
+
+    // Filter out unlinked entities (matching findByPaperclipIdStrict behavior).
+    const linkedResults = allResults.filter((r) => r.status !== "unlinked" && r.scopeId);
+
+    if (linkedResults.length > 1) {
+      logger?.warn("entity-mapper: duplicate entities detected for linearId", {
+        linearIssueId,
+        count: linkedResults.length,
+      });
+    }
+
+    const paperclipId = linkedResults[0]?.scopeId ?? null;
+    if (!paperclipId) return { status: "not_found" };
+
+    // Verify reverse direction.
+    const reverseLinearId = await this.findByPaperclipId(paperclipId);
+    if (reverseLinearId !== linearIssueId) {
+      const reason = `reverse lookup mismatch: paperclipId ${paperclipId} maps to ${reverseLinearId ?? "null"}, expected ${linearIssueId}`;
+      logger?.warn("entity-mapper: inconsistent mapping for linearId", {
+        linearIssueId,
+        paperclipId,
+        reverseLinearId: reverseLinearId ?? null,
+      });
+      return { status: "inconsistent", reason };
+    }
+
+    return { status: "found", id: paperclipId };
+  }
+
+  /**
+   * Strict reverse lookup: find the Linear issue ID for a Paperclip issue ID,
+   * with bidirectional validation. Returns a discriminated result so callers
+   * can distinguish "not found" from "found but corrupted."
+   */
+  async findByPaperclipIdStrict(
+    paperclipIssueId: string,
+    logger?: { warn: (message: string, meta?: Record<string, unknown>) => void },
+  ): Promise<StrictLookupResult> {
+    // Query with a higher limit to detect duplicates.
+    const allResults = await this.ctx.entities.list({
+      entityType: "linear-issue",
+      scopeKind: "issue",
+      scopeId: paperclipIssueId,
+      limit: 10,
+    });
+
+    const linkedResults = allResults.filter((r) => r.status !== "unlinked" && r.externalId);
+    if (linkedResults.length > 1) {
+      logger?.warn("entity-mapper: duplicate entities detected for paperclipId", {
+        paperclipIssueId,
+        count: linkedResults.length,
+      });
+    }
+
+    const entity = linkedResults[0];
+    if (!entity || !entity.externalId) return { status: "not_found" };
+
+    const linearId = entity.externalId;
+
+    // Verify forward direction.
+    const forwardPcId = await this.findByLinearId(linearId);
+    if (forwardPcId !== paperclipIssueId) {
+      const reason = `forward lookup mismatch: linearId ${linearId} maps to ${forwardPcId ?? "null"}, expected ${paperclipIssueId}`;
+      logger?.warn("entity-mapper: inconsistent mapping for paperclipId", {
+        paperclipIssueId,
+        linearId,
+        forwardPcId: forwardPcId ?? null,
+      });
+      return { status: "inconsistent", reason };
+    }
+
+    return { status: "found", id: linearId };
   }
 
   /**
